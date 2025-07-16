@@ -21,7 +21,7 @@ use Psr\Log\LoggerInterface;
 use Shopware\Core\Checkout\Order\OrderCollection;
 use Shopware\Core\Checkout\Order\OrderEntity;
 
-#[AsCommand('boodo:synchronize:orders', 'Sends all orders to Silvasoft from 11.03.2025')]
+#[AsCommand('boodo:synchronize:orders', 'Sends all orders to Silvasoft from set date')]
 class SynchronizeOlderOrdersCommand extends Command
 {
 
