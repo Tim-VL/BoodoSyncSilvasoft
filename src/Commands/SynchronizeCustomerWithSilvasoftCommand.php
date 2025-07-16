@@ -43,7 +43,7 @@ class SynchronizeCustomerWithSilvasoftCommand extends Command
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io = new SymfonyStyle($input, $output);
-        $io->success('Start customers export to Silvasoft');
+        $io->success('Start customers export to Silvasoft - with date filter');
         $context = Context::createDefaultContext();
 
         $criteria = new Criteria();
@@ -68,8 +68,7 @@ class SynchronizeCustomerWithSilvasoftCommand extends Command
             $this->sendCustomerToSilvasoft($customer, $io);
             $io->progressAdvance();
 
-            //sleep(2); // 2 seconds
-            usleep(250000); // 2.5 seconds
+            usleep(1500000); // Sleep 1.5 seconds
         }
 
         $io->progressFinish();
@@ -143,7 +142,7 @@ class SynchronizeCustomerWithSilvasoftCommand extends Command
                 ],
                 'json' => $payload
             ]);
-            usleep(2500000); // 2.5 seconds
+            usleep(1500000); // Sleep 1.5 seconds
             
             $statusCode = $response->getStatusCode();
             if ($statusCode !== 200) {
