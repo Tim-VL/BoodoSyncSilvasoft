@@ -69,7 +69,7 @@ class SynchronizeCustomerWithSilvasoftCommand extends Command
             $io->progressAdvance();
 
             //sleep(2); // 2 seconds
-            usleep(150000); // 1.5 seconds
+            usleep(250000); // 2.5 seconds
         }
 
         $io->progressFinish();
