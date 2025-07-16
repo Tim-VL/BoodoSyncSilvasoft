@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:noNamespaceSchemaLocation="https://raw.githubusercontent.com/shopware/platform/trunk/src/Core/System/SystemConfig/Schema/config.xsd">
+
+    <card>
+        <title>Connetion with Silvasoft</title>
+        <title lang="de-DE">Verbindung mit Silvasoft</title>
+        <title lang="nl-NL">Connectie met Silvasoft</title>
+
+        <input-field type="text">
+            <name>apiUrl</name>
+            <label>Api url</label>
+            <label lang="de-DE">Api-url</label>
+            <label lang="nl-NL">Api-url</label>
+        </input-field>
+
+        <input-field type="text">
+            <name>apiUser</name>
+            <label>Api user</label>
+            <label lang="de-DE">Api-Benutzer</label>
+            <label lang="nl-NL">Api-gebruiker</label>
+        </input-field>
+
+        <input-field type="password">
+            <name>apiKey</name>
+            <label>Api key</label>
+            <label lang="de-DE">Api-Schlüssel</label>
+            <label lang="nl-NL">Api-sleutel</label>
+        </input-field>
+    </card>
+</config>

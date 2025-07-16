@@ -1,0 +1,73 @@
+<?xml version="1.0"?>
+
+<container xmlns="http://symfony.com/schema/dic/services"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://symfony.com/schema/dic/services http://symfony.com/schema/dic/services/services-1.0.xsd">
+
+    <services>
+        <service id="BoodoSyncSilvasoft\Subscriber\GeneralSubscriber">
+            <argument type="service" id="BoodoSyncSilvasoft\Service\MergeGuestAccountService" />
+            <argument type="service" id="Shopware\Core\System\SystemConfig\SystemConfigService" />
+            <argument type="service" id="Symfony\Contracts\HttpClient\HttpClientInterface" />
+            <argument type="service" id="order.repository" />
+            <argument type="service" id="product.repository"/>
+            <argument type="service" id="category.repository"/>
+            <argument type="service" id="logger" />
+            <tag name="kernel.event_subscriber" />
+        </service>
+        <service id="BoodoSyncSilvasoft\Commands\SynchronizeOlderOrdersCommand">
+            <argument type="service" id="Shopware\Core\System\SystemConfig\SystemConfigService" />
+            <argument type="service" id="Symfony\Contracts\HttpClient\HttpClientInterface" />
+            <argument type="service" id="order.repository" />
+            <argument type="service" id="logger" />
+            <tag name="console.command" />
+        </service>
+        <service id="BoodoSyncSilvasoft\Commands\ExportProductsToSilvasoftCommand">
+            <argument type="service" id="Shopware\Core\System\SystemConfig\SystemConfigService" />
+            <argument type="service" id="Symfony\Contracts\HttpClient\HttpClientInterface" />
+            <argument type="service" id="product.repository" />
+            <argument type="service" id="logger" />
+            <tag name="console.command" />
+        </service>
+        <service id="BoodoSyncSilvasoft\Commands\SynchronizeCustomerWithSilvasoftCommand">
+            <argument type="service" id="Shopware\Core\System\SystemConfig\SystemConfigService" />
+            <argument type="service" id="Symfony\Contracts\HttpClient\HttpClientInterface" />
+            <argument type="service" id="customer.repository" />
+            <argument type="service" id="logger" />
+            <tag name="console.command" />
+        </service>
+        <service id="BoodoSyncSilvasoft\Commands\SynchronizeStockWithSilvasoftCommand">
+            <argument type="service" id="BoodoSyncSilvasoft\Service\StockSyncService" />
+            <tag name="console.command" />
+        </service>
+        <service id="BoodoSyncSilvasoft\Service\MergeGuestAccountService">
+            <argument type="service" id="Shopware\Core\System\SystemConfig\SystemConfigService" />
+            <argument type="service" id="Symfony\Contracts\HttpClient\HttpClientInterface" />
+            <argument type="service" id="customer.repository" />
+            <argument type="service" id="order_customer.repository" />
+            <argument type="service" id="logger" />
+        </service>
+        <service id="BoodoSyncSilvasoft\Service\StockSyncService">
+            <argument type="service" id="Shopware\Core\System\SystemConfig\SystemConfigService" />
+            <argument type="service" id="Symfony\Contracts\HttpClient\HttpClientInterface" />
+            <argument type="service" id="product.repository" />
+            <argument type="service" id="logger" />
+        </service>
+        <service id="BoodoSyncSilvasoft\Commands\MergeGuestAccountCommand">
+            <argument type="service" id="BoodoSyncSilvasoft\Service\MergeGuestAccountService" />
+            <tag name="console.command" />
+        </service>
+        <service id="BoodoSyncSilvasoft\Service\ScheduledTask\StockUpdateTask">
+            <tag name="shopware.scheduled.task" />
+        </service>
+        <service id="BoodoSyncSilvasoft\Service\ScheduledTask\StockUpdateTaskHandler">
+            <argument type="service" id="scheduled_task.repository" />
+            <argument type="service" id="Shopware\Core\System\SystemConfig\SystemConfigService" />
+            <argument type="service" id="Symfony\Contracts\HttpClient\HttpClientInterface" />
+            <argument type="service" id="product.repository" />
+            <argument type="service" id="category.repository" />
+            <argument type="service" id="logger" />
+            <tag name="messenger.message_handler" />
+        </service>
+    </services>
+</container>
