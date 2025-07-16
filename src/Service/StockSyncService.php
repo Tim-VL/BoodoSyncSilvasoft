@@ -124,7 +124,7 @@ class StockSyncService
             $payload = [
                 'ArticleNumber' => $product->getProductNumber(),
                 'NewStockQty' => $product->getStock(),
-                'NewSalePrice' => $product->getPrice()->first()?->getNet(), // Net or Gross
+                'NewSalePrice' => $product->getPrice()->first()?->getNet(), // Net or Gross price to sync
             ];
             // Logging/Debug-Ausgabe
             $this->logger->info('[Silvasoft Sync] Stock-Update-Payload', $payload);
