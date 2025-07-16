@@ -1,7 +1,5 @@
 # BoodoSyncSilvasoft
 The plugin synchronises the Silvasoft ERP system with the Shopware version 6 e-commerce solution.
-<br /><br />
-
 
 
 ## Use the script in this order:
@@ -9,8 +7,6 @@ The plugin synchronises the Silvasoft ERP system with the Shopware version 6 e-c
 2. bin/console boodo:synchronize:customer
 3. bin/console boodo:synchronize:products
 4. bin/console boodo:synchronize:orders
-
-<br /><br />
 
 
 ## Sync only stock and sale price;
