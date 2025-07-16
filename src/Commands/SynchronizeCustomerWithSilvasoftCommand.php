@@ -143,7 +143,8 @@ class SynchronizeCustomerWithSilvasoftCommand extends Command
                 ],
                 'json' => $payload
             ]);
-
+            usleep(250000); // 2.5 seconds
+            
             $statusCode = $response->getStatusCode();
             if ($statusCode !== 200) {
                 $this->logger->error("Error when transferring a customer to Silvasoft API: " . $response->getContent(false));
