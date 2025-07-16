@@ -68,8 +68,8 @@ class SynchronizeCustomerWithSilvasoftCommand extends Command
             $this->sendCustomerToSilvasoft($customer, $io);
             $io->progressAdvance();
 
-            sleep(2);
-            //usleep(150000); // 1.5 seconds = 1,500,000 microseconds
+            //sleep(2); // 2 seconds
+            usleep(150000); // 1.5 seconds
         }
 
         $io->progressFinish();
