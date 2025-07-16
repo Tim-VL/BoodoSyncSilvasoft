@@ -143,7 +143,7 @@ class SynchronizeCustomerWithSilvasoftCommand extends Command
                 ],
                 'json' => $payload
             ]);
-            usleep(250000); // 2.5 seconds
+            usleep(2500000); // 2.5 seconds
             
             $statusCode = $response->getStatusCode();
             if ($statusCode !== 200) {
