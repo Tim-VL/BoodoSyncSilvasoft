@@ -2,16 +2,20 @@
 The plugin synchronises the Silvasoft ERP system with the Shopware version 6 e-commerce solution.
 
 
+
+
 ## Use the script in this order:
-bin/console boodo:merge-guest-customers
-bin/console boodo:synchronize:customer
-bin/console boodo:synchronize:products
-bin/console boodo:synchronize:orders
+1. bin/console boodo:merge-guest-customers
+2. bin/console boodo:synchronize:customer
+3. bin/console boodo:synchronize:products
+4. bin/console boodo:synchronize:orders
+
+
 
 
 ## Sync only stock and sale price;
-From SilvaSoft to Shopware
-bin/console boodo:synchronize:stock
+**From SilvaSoft to Shopware**
+1. bin/console boodo:synchronize:stock
 
-From Shopware to SilvaSoft
-bin/console boodo:synchronize:stock --direction=pus
+**From Shopware to SilvaSoft**
+1. bin/console boodo:synchronize:stock --direction=pus
