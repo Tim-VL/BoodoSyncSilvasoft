@@ -8,6 +8,7 @@ use Shopware\Core\System\SystemConfig\SystemConfigService;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 use Shopware\Core\Framework\DataAbstractionLayer\EntityRepository;
@@ -40,6 +41,18 @@ class SynchronizeOlderOrdersCommand extends Command
         $this->apiUser = $this->systemConfigService->get('BoodoSyncSilvasoft.config.apiUser');
     }
 
+    protected function configure(): void
+    {
+        $this
+            ->addOption(
+                'date',
+                'd',
+                InputOption::VALUE_REQUIRED,
+                'Filter orders from this date (format: YYYY-MM-DD)',
+                null
+            );
+    }
+
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io = new SymfonyStyle($input, $output);
@@ -56,7 +69,22 @@ class SynchronizeOlderOrdersCommand extends Command
         $criteria->addFilter(new NotFilter(NotFilter::CONNECTION_AND, [
             new EqualsFilter('stateMachineState.technicalName', 'cancelled')
         ]));
-        $criteria->addFilter(new RangeFilter('orderDateTime', ['gte' => (new \DateTime('2025-01-01'))->format(DATE_ATOM)]));
+        
+        $dateString = $input->getOption('date');
+        
+        if ($dateString) {
+            try {
+                $fromDate = new \DateTime($dateString);
+                $io->info(sprintf('Filtering orders from date: %s', $fromDate->format('Y-m-d')));
+                $criteria->addFilter(new RangeFilter('orderDateTime', ['gte' => $fromDate->format(DATE_ATOM)]));
+            } catch (\Exception $e) {
+                $io->error(sprintf('Invalid date format: %s. Please use YYYY-MM-DD format.', $dateString));
+                return Command::FAILURE;
+            }
+        } else {
+            // Use original hardcoded filter when no date is provided
+            $criteria->addFilter(new RangeFilter('orderDateTime', ['gte' => (new \DateTime('2025-01-01'))->format(DATE_ATOM)]));
+        }
 
         /**
          * @var OrderCollection
