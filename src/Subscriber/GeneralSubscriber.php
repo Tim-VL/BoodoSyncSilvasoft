@@ -38,7 +38,7 @@ class GeneralSubscriber implements EventSubscriberInterface
         private readonly EntityRepository $categoryRepository,
         private readonly LoggerInterface $logger
     ) {
-        // API-Key und Credentials aus Shopware-Config holen
+        // Get API key and credentials from Shopware config
         $this->apiUrl = $this->systemConfigService->get('BoodoSyncSilvasoft.config.apiUrl');
         $this->apiKey = $this->systemConfigService->get('BoodoSyncSilvasoft.config.apiKey');
         $this->apiUser = $this->systemConfigService->get('BoodoSyncSilvasoft.config.apiUser');
@@ -94,17 +94,17 @@ class GeneralSubscriber implements EventSubscriberInterface
             return;
         }
 
-        // Bestellung in Silvasoft-Format konvertieren
+        // Convert order to Silvasoft format
         $payload = [
             "CustomerNumber" => $customer->getCustomerNumber(),
-            "OrderNotes" => "Order from Shopware",
-            "OrderReference" => $order->getOrderNumber(),
-            "OrderStatus" => $orderStatus,
-            "TemplateName_Email_PackingSlip" => "Standaard template",
+            "InvoiceNotes" => $order->getOrderNumber(),
+            "InvoiceReference" => $order->getOrderNumber(),
+             //  "OrderStatus" => $orderStatus,
+            "TemplateName_Invoice" => "Standaard template",
             "TemplateName_Email" => "Standaard template",
-            "TemplateName_Order" => "Standaard template",
-            "TemplateName_PackingSlip" => "Standaard template",
-            "Order_Contact" => [
+            // "TemplateName_Order" => "Standaard template",
+            // "TemplateName_PackingSlip" => "Standaard template",
+            "Invoice_Contact" => [
                 [
                     "ContactType" => "Invoice",
                     "Email" => $customer->getEmail(),
@@ -113,7 +113,7 @@ class GeneralSubscriber implements EventSubscriberInterface
                     "DefaultContact" => true
                 ]
             ],
-            "Order_Orderline" => array_values(array_map(function ($lineItem) {
+            "Invoice_InvoiceLine" => array_values(array_map(function ($lineItem) {
                 /** @var CalculatedPrice $price */
                 $price = $lineItem->getPrice();
                 $unitPriceGross = $price->getUnitPrice();
@@ -131,7 +131,7 @@ class GeneralSubscriber implements EventSubscriberInterface
                     "Description" => $lineItem->getDescription()
                 ];
             }, $order->getLineItems()->getElements())),
-            'Order_Address' => [
+            'Invoice_Address' => [
                 [
                     'Address_Street' => $billingAddress->getStreet(),
                     'Address_City' => $billingAddress->getCity(),
@@ -150,7 +150,7 @@ class GeneralSubscriber implements EventSubscriberInterface
         ];
 
         try {
-            $response = $this->httpClient->request('POST', (string) $this->apiUrl . '/rest/addorder/', [
+            $response = $this->httpClient->request('POST', (string) $this->apiUrl . '/rest/addsalesinvoice/', [
                 'headers' => [
                     'Accept-Encoding' => 'gzip,deflate',
                     'Content-Type' => 'application/json',
@@ -168,12 +168,12 @@ class GeneralSubscriber implements EventSubscriberInterface
                 $uncompressed = gzdecode($content);
                 $data = json_decode($content, true);
                 if ($uncompressed === false) {
-                    $this->logger->error('Dekomprimierung der API-Antwort fehlgeschlagen');
+                    $this->logger->error('API response decompression failed');
                 } else {
                     $data = json_decode($uncompressed, true);
 
                     if (json_last_error() !== JSON_ERROR_NONE) {
-                        $this->logger->error('JSON-Fehler: ' . json_last_error_msg());
+                        $this->logger->error('JSON-Error: ' . json_last_error_msg());
                     } else {
                         if (isset($data['OrderNumber'])) {
                             $customFields = $order->getCustomFields() ?? [];
@@ -205,7 +205,7 @@ class GeneralSubscriber implements EventSubscriberInterface
 
             $newState = $order->getStateMachineState() ? $order->getStateMachineState()->getTechnicalName() : 'Unknown';
 
-            // Prüfe Custom Field
+            // Check Custom Field
             $customFields = $order->getCustomFields() ?? [];
             $silvasoftOrderNumber = $customFields['silvasoft_ordernumber'] ?? null;
 
@@ -229,7 +229,7 @@ class GeneralSubscriber implements EventSubscriberInterface
     {
         foreach ($event->getWriteResults() as $writeResult) {
             $payload = $writeResult->getPayload();
-            // Prüfen, ob es sich um ein neues Produkt handelt
+            // Check if it is a new product
             if (!isset($payload['id'])) {
                 continue;
             }
@@ -238,7 +238,7 @@ class GeneralSubscriber implements EventSubscriberInterface
             $product = $this->fetchProductData($productId, $event->getContext());
 
             if (!$product) {
-                $this->logger->error("product not found: " . $productId);
+                $this->logger->error("Product not found: " . $productId);
                 continue;
             }
 
@@ -312,7 +312,7 @@ class GeneralSubscriber implements EventSubscriberInterface
                     $this->logger->info('Product successfully sent to Silvasoft: ' . $productNumber);
                 }
             } catch (\Exception $e) {
-                $this->logger->error('Silvasoft API Fehler: ' . $e->getMessage());
+                $this->logger->error('Silvasoft API Error: ' . $e->getMessage());
             }
         }
     }
@@ -323,7 +323,7 @@ class GeneralSubscriber implements EventSubscriberInterface
         $address = $customer->getDefaultBillingAddress();
 
         if (!$this->apiKey || !$this->apiUser) {
-            $this->logger->error('Silvasoft API Credentials fehlen.');
+            $this->logger->error('Silvasoft API credentials are missing.');
             return;
         }
 
