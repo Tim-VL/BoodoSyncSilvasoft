@@ -56,7 +56,7 @@ class SynchronizeOlderOrdersCommand extends Command
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io = new SymfonyStyle($input, $output);
-        $io->success('Start orders export Silvasoft');
+        $io->success('Start salesinvoice export Silvasoft');
 
         $context = Context::createDefaultContext();
         $criteria = new Criteria();
@@ -102,11 +102,11 @@ class SynchronizeOlderOrdersCommand extends Command
         foreach ($orders as $order) {
 
             $customFields = $order->getCustomFields() ?? [];
-            if (isset($customFields['silvasoft_ordernumber']) && !empty($customFields['silvasoft_ordernumber'])) {
+            if (isset($customFields['silvasoft_invoicenumber']) && !empty($customFields['silvasoft_invoicenumber'])) {
                 $this->logger->info(
-                    'Order ' . $order->getOrderNumber() . ' already synced with Silvasoft ID: ' . $customFields['silvasoft_ordernumber']
+                    'Invoice ' . $order->getOrderNumber() . ' already synced with Silvasoft ID: ' . $customFields['silvasoft_invoicenumber']
                 );
-                $io->note('Skipping already synced order: ' . $order->getOrderNumber());
+                $io->note('Skipping already synced invoice: ' . $order->getOrderNumber());
                 continue;
             }
 
@@ -130,43 +130,31 @@ class SynchronizeOlderOrdersCommand extends Command
 
             $payload = [
                 "CustomerNumber" => $customer->getCustomerNumber(),
-                "OrderNotes" => "Order from Shopware",
-                "OrderReference" => $order->getOrderNumber(),
-                "OrderStatus" => $orderStatus,
-                "OrderDate" => $formattedOrderDate,
-                "TemplateName_Email_PackingSlip" => "Standaard template",
+                "InvoiceNotes" => $order->getOrderNumber(),
+                "InvoiceReference" => $order->getOrderNumber(),
+                "InvoiceDate" => $formattedOrderDate,
+                "TemplateName_Invoice" => "Standaard template",
                 "TemplateName_Email" => "Standaard template",
-                "TemplateName_Order" => "Standaard template",
-                "TemplateName_PackingSlip" => "Standaard template",
-                "Order_Contact" => [
+                "PackingSlipNotes" => "Extra note to be added to the packing-slip",
+
+                "Invoice_Contact" => [
                     [
                         "ContactType" => "Invoice",
                         "Email" => $customer->getEmail(),
                         "FirstName" => $customer->getFirstName(),
                         "LastName" => $customer->getLastName(),
                         "DefaultContact" => true
+                    ],
+                    [
+                        "ContactType" => "PackingSlip",
+                        "Email" => $customer->getEmail(),
+                        "FirstName" => $customer->getFirstName(),
+                        "LastName" => $customer->getLastName(),
+                        "DefaultContact" => true
                     ]
-                ],
-                "Order_Orderline" => array_values(array_map(function ($lineItem) {
+                ], 
 
-
-                    $price = $lineItem->getPrice();
-                    $unitPriceGross = $price->getUnitPrice();
-                    $taxRules = $price->getCalculatedTaxes();
-                    $taxPercentage = $taxRules ? $taxRules->first()?->getTaxRate() : 21;
-
-                    $taxRate = $taxRules->first() ? $taxRules->first()->getTaxRate() : 21;
-                    $unitPriceNet = $unitPriceGross / (1 + ($taxRate / 100));
-
-                    return [
-                        "ProductNumber" => $lineItem->getProduct() ? $lineItem->getProduct()->getProductNumber() : '',
-                        "Quantity" => $lineItem->getQuantity(),
-                        "TaxPc" => $taxPercentage,
-                        "UnitPriceExclTax" => $unitPriceNet,
-                        "Description" => $lineItem->getDescription()
-                    ];
-                }, $order->getLineItems()?->getElements() ?? [])),
-                'Order_Address' => [
+              "Invoice_Address" => [
                     [
                         'Address_Street' => $billingAddress->getStreet(),
                         'Address_City' => $billingAddress->getCity(),
@@ -181,11 +169,31 @@ class SynchronizeOlderOrdersCommand extends Command
                         'Address_CountryCode' => $shippingAddress->getCountry()->getIso(),
                         'Address_Type' => 'ShippingAddress'
                     ]
-                ]
+                ],
+
+                "Invoice_InvoiceLine" => array_values(array_map(function ($lineItem) {
+
+                    $price = $lineItem->getPrice();
+                    $unitPriceGross = $price->getUnitPrice();
+                    $taxRules = $price->getCalculatedTaxes();
+                    $taxPercentage = $taxRules ? $taxRules->first()?->getTaxRate() : 21;
+
+                    $taxRate = $taxRules->first() ? $taxRules->first()->getTaxRate() : 21;
+                    $unitPriceNet = $unitPriceGross / (1 + ($taxRate / 100));
+
+                    return [
+                        "ProductNumber" => $lineItem->getProduct() ? $lineItem->getProduct()->getProductNumber() : '',
+                        "Quantity" => $lineItem->getQuantity(),
+                        "TaxPc" => $taxPercentage,
+                        "UnitPriceExclTax" => $unitPriceNet,
+                        "Description" => $lineItem->getDescription() // Invoice line description
+                    ];
+                }, $order->getLineItems()?->getElements() ?? [])),
+                
             ];
 
             try {
-                $response = $this->httpClient->request('POST', (string) $this->apiUrl . '/rest/addorder/', [
+                $response = $this->httpClient->request('POST', (string) $this->apiUrl . '/rest/addsalesinvoice/', [
                     'headers' => [
                         'Accept-Encoding' => 'gzip,deflate',
                         'Content-Type' => 'application/json',
@@ -201,11 +209,11 @@ class SynchronizeOlderOrdersCommand extends Command
                     $io->warning('Silvasoft API error when sending the order with the order number: ' . $order->getOrderNumber());
                 } else {
                     $responseData = json_decode($response->getContent(), true);
-                    if (isset($responseData['OrderNumber'])) {
+                    if (isset($responseData['InvoiceNumber'])) {
                         $customFields = $order->getCustomFields() ?? [];
 
-                        if (!isset($customFields['silvasoft_ordernumber'])) {
-                            $customFields['silvasoft_ordernumber'] = $responseData['OrderNumber'];
+                        if (!isset($customFields['silvasoft_invoicenumber'])) {
+                            $customFields['silvasoft_invoicenumber'] = $responseData['InvoiceNumber'];
 
                             // Update durchführen
                             $this->orderRepository->upsert([
@@ -215,10 +223,10 @@ class SynchronizeOlderOrdersCommand extends Command
                                 ]
                             ], $context);
 
-                            $this->logger->info('Silvasoft order number saved for order: ' . $order->getOrderNumber());
+                            $this->logger->info('Silvasoft invoice number saved for invoice: ' . $order->getOrderNumber());
                         }
                     }
-                    $this->logger->info('Order successfully sent to Silvasoft: ' . $order->getOrderNumber());
+                    $this->logger->info('Invoice successfully sent to Silvasoft: ' . $order->getOrderNumber());
                 }
             } catch (\Exception $e) {
                 $this->logger->error('Silvasoft API request failed: ' . $e->getMessage());
