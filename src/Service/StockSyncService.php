@@ -37,7 +37,7 @@ class StockSyncService
      */
     public function pullStockFromSilvasoft(Context $context, SymfonyStyle $io): void
     {
-        $limit = 110;
+        $limit = 100;
         $offset = 0;
         $updatedCount = 0;
         do {
@@ -125,6 +125,7 @@ class StockSyncService
                 'ArticleNumber' => $product->getProductNumber(),
                 'NewStockQty' => $product->getStock(),
                 'NewSalePrice' => $product->getPrice()->first()?->getNet(), // Net or Gross price to sync
+                'StockUpdateMode' => 'Absolute'
             ];
             // Logging/Debug-Ausgabe
             $this->logger->info('[Silvasoft Sync] Stock-Update-Payload', $payload);
