@@ -142,7 +142,7 @@ class StockSyncService
                     'json' => $payload,
                 ]);
             // Rate-Limit: max. 2 Requests/Sekunde
-            usleep(600000); // 0.6 Sekunde Pause
+            usleep(800000); // 0.8 Sekunde Pause
             } catch (\Exception $e) {
                 $this->logger->error('[Silvasoft Sync] Error updating stock for '.$product->getProductNumber().': '.$e->getMessage());
             }
