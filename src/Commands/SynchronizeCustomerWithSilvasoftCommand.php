@@ -20,6 +20,10 @@ use Psr\Log\LoggerInterface;
 use Shopware\Core\Checkout\Customer\CustomerCollection;
 use Shopware\Core\Checkout\Customer\CustomerEntity;
 use Shopware\Core\Checkout\Order\OrderEntity;
+use Shopware\Core\Framework\DataAbstractionLayer\Search\Filter\NotFilter;
+use Shopware\Core\Framework\DataAbstractionLayer\Search\Filter\EqualsFilter;
+use Shopware\Core\Framework\DataAbstractionLayer\Search\Filter\RangeFilter;
+
 
 #[AsCommand('boodo:synchronize:customer', 'Exports all existing customer to Silvasoft')]
 class SynchronizeCustomerWithSilvasoftCommand extends Command
@@ -52,7 +56,17 @@ class SynchronizeCustomerWithSilvasoftCommand extends Command
         $criteria->addAssociation('defaultShippingAddress.country');
         $criteria->addAssociation('defaultBillingAddress.country');
         $criteria->addAssociation('salutation');
+      
+        /* Add NEVER LOGIN */ 
+        $criteria->addFilter(
+            new NotFilter(
+                NotFilter::CONNECTION_AND,
+                [new EqualsFilter('lastLogin', null)]
+            )
+        );
+        /* end login*/
 
+        
         /** @var CustomerCollection $customers */
         $customers = $this->customerRepository->search($criteria, $context)->getEntities();
 
