@@ -7,6 +7,7 @@ https://developers.silvasoft.nl/
 2. bin/console boodo:synchronize:customer
 3. bin/console boodo:synchronize:products
 4. bin/console boodo:synchronize:orders
+<br><i>or use with date string</i>
 <br>bin/console boodo:synchronize:orders --date=2025-06-01
 
 
