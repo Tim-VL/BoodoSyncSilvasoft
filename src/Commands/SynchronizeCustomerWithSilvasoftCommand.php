@@ -23,9 +23,10 @@ use Shopware\Core\Checkout\Order\OrderEntity;
 use Shopware\Core\Framework\DataAbstractionLayer\Search\Filter\NotFilter;
 use Shopware\Core\Framework\DataAbstractionLayer\Search\Filter\EqualsFilter;
 use Shopware\Core\Framework\DataAbstractionLayer\Search\Filter\RangeFilter;
+use Symfony\Component\Console\Input\InputOption;
 
 
-#[AsCommand('boodo:synchronize:customer', 'Exports all existing customer to Silvasoft')]
+#[AsCommand('boodo:synchronize:customer', 'Exports all existing customer to Silvasoft from set date')]
 class SynchronizeCustomerWithSilvasoftCommand extends Command
 {
 
@@ -44,6 +45,18 @@ class SynchronizeCustomerWithSilvasoftCommand extends Command
         $this->apiUser = $this->systemConfigService->get('BoodoSyncSilvasoft.config.apiUser');
     }
 
+    protected function configure(): void
+    {
+        $this
+            ->addOption(
+                'date',
+                'd',
+                InputOption::VALUE_REQUIRED,
+                'Filter Customers from this date (format: YYYY-MM-DD)',
+                null
+            );
+    }
+
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io = new SymfonyStyle($input, $output);
@@ -58,13 +71,29 @@ class SynchronizeCustomerWithSilvasoftCommand extends Command
         $criteria->addAssociation('salutation');
       
         /* Add NEVER LOGIN */ 
-        $criteria->addFilter(
-            new NotFilter(
-                NotFilter::CONNECTION_AND,
-                [new EqualsFilter('lastLogin', null)]
-            )
-        );
+      //  $criteria->addFilter(
+      //      new NotFilter(
+     //           NotFilter::CONNECTION_AND,
+     //           [new EqualsFilter('lastLogin', null)]
+     //       )
+     //   );
         /* end login*/
+
+        $dateString = $input->getOption('date');
+
+        if ($dateString) {
+            try {
+                $fromDate = new \DateTime($dateString);
+                $io->info(sprintf('Filtering customers from date: %s', $fromDate->format('Y-m-d')));
+                $criteria->addFilter(new RangeFilter('createdAt', ['gte' => $fromDate->format(DATE_ATOM)]));
+            } catch (\Exception $e) {
+                $io->error(sprintf('Invalid date format: %s. Please use YYYY-MM-DD format.', $dateString));
+                return Command::FAILURE;
+            }
+        } else {
+            // Use original hardcoded filter when no date is provided
+            $criteria->addFilter(new RangeFilter('createdAt', ['gte' => (new \DateTime('2025-01-01'))->format(DATE_ATOM)]));
+        }
 
         
         /** @var CustomerCollection $customers */
@@ -163,9 +192,11 @@ class SynchronizeCustomerWithSilvasoftCommand extends Command
                 $this->logger->error("Error when transferring a customer to Silvasoft API: " . $response->getContent(false));
                 $this->logger->error('Silvasoft API error when sending the customer with the customer number: ' . $customer->getCustomerNumber());
                 $io->warning('Silvasoft API error when sending the product with the customer number: ' . $customer->getCustomerNumber());
+                
             }
         } catch (\Exception $e) {
             $this->logger->error("API error: " . $e->getMessage());
+
         }
     }
 }
