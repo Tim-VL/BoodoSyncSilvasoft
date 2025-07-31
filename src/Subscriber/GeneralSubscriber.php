@@ -65,6 +65,7 @@ class GeneralSubscriber implements EventSubscriberInterface
 
         $criteria = new Criteria([$order->getId()]);
         $criteria->addAssociation('billingAddress.country');
+        $criteria->addAssociation('salesChannel');
         $criteria->addAssociation('orderCustomer');
 
         /** @var OrderEntity|null $orderFromDb */
@@ -93,17 +94,20 @@ class GeneralSubscriber implements EventSubscriberInterface
             $this->logger->error('Silvasoft API credentials not set.');
             return;
         }
+        $paymentMethod = $order->getTransactions()->first()?->getPaymentMethod()?->getName() ?? '';
+        $salesChannel = $orderFromDb->getSalesChannel()?->getTranslated()['name'] ?? '';
+        $customerComment = $order->getCustomerComment() ?? 'No comment found';
 
-        // Convert order to Silvasoft format
         $payload = [
             "CustomerNumber" => $customer->getCustomerNumber(),
-            "InvoiceNotes" => $order->getOrderNumber(),
+            "InvoiceNotes" => 
+                    "Payment method:" . $paymentMethod . " on " . (new \DateTime())->format('Y-m-d H:i:s') . "\n" .
+                    "Order Number: " . $order->getOrderNumber() . "\n" .
+                    "Sales Channel: " . $salesChannel . "\n" .
+                    "Customer Comment: " . nl2br(htmlspecialchars($customerComment)),
             "InvoiceReference" => $order->getOrderNumber(),
-             //  "OrderStatus" => $orderStatus,
             "TemplateName_Invoice" => "Standaard template",
             "TemplateName_Email" => "Standaard template",
-            // "TemplateName_Order" => "Standaard template",
-            // "TemplateName_PackingSlip" => "Standaard template",
             "Invoice_Contact" => [
                 [
                     "ContactType" => "Invoice",
@@ -163,10 +167,14 @@ class GeneralSubscriber implements EventSubscriberInterface
             $statusCode = $response->getStatusCode();
             if ($statusCode !== 200) {
                 $this->logger->error('Silvasoft API error: ' . $response->getContent(false));
+
             } else {
                 $content = $response->getContent(false);
+                
                 $uncompressed = gzdecode($content);
                 $data = json_decode($content, true);
+
+
                 if ($uncompressed === false) {
                     $this->logger->error('API response decompression failed');
                 } else {
@@ -175,23 +183,34 @@ class GeneralSubscriber implements EventSubscriberInterface
                     if (json_last_error() !== JSON_ERROR_NONE) {
                         $this->logger->error('JSON-Error: ' . json_last_error_msg());
                     } else {
-                        if (isset($data['OrderNumber'])) {
-                            $customFields = $order->getCustomFields() ?? [];
-                            $customFields['silvasoft_ordernumber'] = $data['OrderNumber'];
 
-                            $this->orderRepository->upsert([
-                                [
-                                    'id' => $order->getId(),
-                                    'customFields' => $customFields
-                                ]
-                            ], $event->getContext());
+                        $invNUmber = '';
+
+                        if (isset($data['InvoiceNumber'])) {
+                            $invNUmber = $data['InvoiceNumber'];
+                        } elseif ($data[0] && isset($data[0]['InvoiceNumber'])) {
+                            $invNUmber = $data[0]['InvoiceNumber'];
+                        } else {
+                            $this->logger->error('InvoiceNumber missing in response', ['response' => $data]);
                         }
+                        
+                        $customFields = $order->getCustomFields() ?? [];
+                        $customFields['silvasoft_ordernumber'] = $invNUmber;
+
+                        $this->orderRepository->upsert([
+                            [
+                                'id' => $order->getId(),
+                                'customFields' => $customFields
+                            ]
+                        ], $event->getContext());
                     }
                 }
                 $this->logger->info('Order successfully sent to Silvasoft: ' . $order->getOrderNumber());
             }
         } catch (\Exception $e) {
             $this->logger->error('Silvasoft API request failed: ' . $e->getMessage());
+
+
         }
     }
 
