@@ -5,6 +5,8 @@ https://developers.silvasoft.nl/
 ## Use the script in this order:
 1. bin/console boodo:merge-guest-customers
 2. bin/console boodo:synchronize:customer
+<br><i>or use with date string</i>
+<br>bin/console boodo:synchronize:customer --date=25-06-01
 3. bin/console boodo:synchronize:products
 4. bin/console boodo:synchronize:orders
 <br><i>or use with date string</i>
