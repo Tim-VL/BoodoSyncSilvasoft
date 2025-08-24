@@ -51,7 +51,7 @@ class SynchronizeOlderOrdersCommand extends Command
             json_encode($context, JSON_UNESCAPED_SLASHES)
         );
         
-        error_log($logEntry, 3, $this->getLogPath('order-sync_api_errors'));
+        error_log($logEntry, 3, $this->getLogPath('api_errors'));
     }
 
     private function getLogPath(string $logType): string
@@ -172,23 +172,21 @@ class SynchronizeOlderOrdersCommand extends Command
             $customerComment = $order->getCustomerComment() ?? '';
 
             $payload = [
-                //"CustomerNumber" => $customer->getCustomerNumber(), // sync based on customernr
-				"CustomerEmail" => strtolower($customer->getEmail()), // sync based on email 
-                "InvoiceNotes" =>
-                    (!empty(trim($customerComment)) ? "<h3>Customer Comment: " . nl2br(htmlspecialchars($customerComment)) . "</h3>\n<br>\n" : '') .
+                "CustomerNumber" => $customer->getCustomerNumber(),
+                "InvoiceNotes" => "<h3>Customer Comment: " . nl2br(htmlspecialchars($customerComment)). "</h3>\n<br>\n" .
                     "<b>Paymentmethod:</b> " . $order->getTransactions()->first()?->getPaymentMethod()?->getName() . " on " . (new \DateTime())->format('Y-m-d H:i:s') . "<br>\n" .
                     "<b>OrderNumber:</b> " . $order->getOrderNumber() . "<br>\n" .
                     "<b>SalesChannel:</b> " . $salesChannel . "<br>\n" ,
                 "InvoiceReference" => $order->getOrderNumber(),
                 "InvoiceDate" => $formattedOrderDate,
-             //   "TemplateName_Invoice" => "Standaard template",
-             //   "TemplateName_Email" => "Standaard template",
-             //   "PackingSlipNotes" => "Extra note to be added to the packing-slip",
+                "TemplateName_Invoice" => "Standaard template",
+                "TemplateName_Email" => "Standaard template",
+                "PackingSlipNotes" => "Extra note to be added to the packing-slip",
 
                 "Invoice_Contact" => [
                     [
                         "ContactType" => "Invoice",
-                        "Email" => strtolower($customer->getEmail()),
+                        "Email" => $customer->getEmail(),
                         "FirstName" => $customer->getFirstName(),
                         "LastName" => $customer->getLastName(),
                         "DefaultContact" => true
@@ -230,14 +228,11 @@ class SynchronizeOlderOrdersCommand extends Command
                     $unitPriceNet = $unitPriceGross / (1 + ($taxRate / 100));
 
                     return [
-                        //"ProductNumber" => $lineItem->getProduct() ? $lineItem->getProduct()->getProductNumber() : '',
-                        "ProductNumber" => $lineItem->getProduct()?->getProductNumber() ?? 'UNKNOWN_PRODUCT',
+                        "ProductNumber" => $lineItem->getProduct() ? $lineItem->getProduct()->getProductNumber() : '',
                         "Quantity" => $lineItem->getQuantity(),
                         "TaxPc" => $taxPercentage,
                         "UnitPriceExclTax" => $unitPriceNet,
-                       // "Description" => $lineItem->getDescription() // Invoice line description
-                       // "Description" => $lineItem->getDescription() ?? $lineItem->getLabel() ?? 'No description'
-                       "Description" => $lineItem->getLabel() ?? 'API - No line description retrived'
+                        "Description" => $lineItem->getDescription() // Invoice line description
                     ];
                 }, $order->getLineItems()?->getElements() ?? [])),
                 
@@ -276,7 +271,7 @@ class SynchronizeOlderOrdersCommand extends Command
                     if (!is_array($data)) {
                         $this->logger->error('Invalid API response format');
                         $io->warning('Failed to process Silvasoft response for order: ' . $order->getOrderNumber());
-                        $this->logError("API failed", ['status' => $statusCode, 'content' => $data . "\n\n"]);
+                        $this->logError("API failed", ['status' => $statusCode, 'content' => $data]);
                         continue; 
                     }
                     
@@ -311,11 +306,11 @@ class SynchronizeOlderOrdersCommand extends Command
                 $this->logger->error('Silvasoft API request failed: ' . $e->getMessage());
                 $this->logger->error('Silvasoft API error PAYLOAD: ' . json_encode($payload, JSON_PRETTY_PRINT));
 
-                $this->logError("API failed", ['message' => $e->getMessage(), 'content' => $payload . "\n\n" ]);
+                $this->logError("API failed", ['message' => $e->getMessage(), 'content' => $payload]);
                 restore_error_handler();
             }
-            usleep(1200000); // Sleep 1.2 seconds
-            //sleep(2);
+
+            sleep(2);
         }
         $io->progressFinish();
         return self::SUCCESS;

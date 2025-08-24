@@ -29,6 +29,7 @@ class GeneralSubscriber implements EventSubscriberInterface
     private ?string $apiUrl;
     private ?string $apiKey;
     private ?string $apiUser;
+
     public function __construct(
         private readonly MergeGuestAccountService $mergeGuestAccountService,
         private readonly SystemConfigService $systemConfigService,
@@ -38,7 +39,6 @@ class GeneralSubscriber implements EventSubscriberInterface
         private readonly EntityRepository $categoryRepository,
         private readonly LoggerInterface $logger
     ) {
-        // Get API key and credentials from Shopware config
         $this->apiUrl = $this->systemConfigService->get('BoodoSyncSilvasoft.config.apiUrl');
         $this->apiKey = $this->systemConfigService->get('BoodoSyncSilvasoft.config.apiKey');
         $this->apiUser = $this->systemConfigService->get('BoodoSyncSilvasoft.config.apiUser');
@@ -54,12 +54,22 @@ class GeneralSubscriber implements EventSubscriberInterface
         ];
     }
 
-    public function onOrderPlaced(CheckoutOrderPlacedEvent $event)
+    private function getApiHeaders(): array
+    {
+        return [
+            'Accept-Encoding' => 'gzip,deflate',
+            'Content-Type' => 'application/json',
+            'ApiKey' => $this->apiKey,
+            'Username' => $this->apiUser
+        ];
+    }
+
+    public function onOrderPlaced(CheckoutOrderPlacedEvent $event): void
     {
         $order = $event->getOrder();
         $customer = $order->getOrderCustomer();
 
-        if ($customer->getCustomer()->getGuest()) {
+        if ($customer->getCustomer()?->getGuest()) {
             $updatesCustomers = $this->mergeGuestAccountService->executeMerge();
         }
 
@@ -68,46 +78,51 @@ class GeneralSubscriber implements EventSubscriberInterface
         $criteria->addAssociation('salesChannel');
         $criteria->addAssociation('orderCustomer');
 
-        /** @var OrderEntity|null $orderFromDb */
         $orderFromDb = $this->orderRepository->search($criteria, $event->getContext())->first();
-
         if (!$orderFromDb) {
             $this->logger->error('Order not found.');
             return;
         }
 
-        if ($customer->getCustomer()->getGuest() && isset($updatesCustomers[$customer->getEmail()])) {
+        if ($customer->getCustomer()?->getGuest() && isset($updatesCustomers[$customer->getEmail()])) {
             $customer = $updatesCustomers[$customer->getEmail()];
         }
 
         $billingAddress = $orderFromDb->getBillingAddress();
-        $shippingAddress = $order->getDeliveries()->first() ? $order->getDeliveries()->first()->getShippingOrderAddress() : null;
+        $shippingAddress = $order->getDeliveries()->first()?->getShippingOrderAddress();
 
         if (!$billingAddress || !$shippingAddress) {
-            $this->logger->error('Billing or Shipping address is missing for order ID: ' . $order->getOrderNumber());
+            $this->logger->error('Missing address for order: ' . $order->getOrderNumber());
             return;
         }
-
-        $orderStatus = $order->getStateMachineState() ? $order->getStateMachineState()->getTechnicalName() : 'Unknown';
 
         if (!$this->apiKey || !$this->apiUser) {
             $this->logger->error('Silvasoft API credentials not set.');
             return;
         }
+
+        try {
+            $this->createSilvasoftCustomerFromOrderContext($customer, $billingAddress);
+        } catch (\Throwable $e) {
+            $this->logger->error('Customer create failed: ' . $e->getMessage());
+        }
+
         $paymentMethod = $order->getTransactions()->first()?->getPaymentMethod()?->getName() ?? '';
         $salesChannel = $orderFromDb->getSalesChannel()?->getTranslated()['name'] ?? '';
-        $customerComment = $order->getCustomerComment() ?? 'No comment found';
+        $customerComment = $order->getCustomerComment() ?? '';
+        $formattedOrderDate = $order->getCreatedAt()?->format('Y-m-d') ?? (new \DateTime())->format('Y-m-d'); // add suggestion
 
         $payload = [
-            "CustomerNumber" => $customer->getCustomerNumber(),
-            "InvoiceNotes" => 
-                    "Payment method:" . $paymentMethod . " on " . (new \DateTime())->format('Y-m-d H:i:s') . "\n" .
-                    "Order Number: " . $order->getOrderNumber() . "\n" .
-                    "Sales Channel: " . $salesChannel . "\n" .
-                    "Customer Comment: " . nl2br(htmlspecialchars($customerComment)),
-            "InvoiceReference" => $order->getOrderNumber(),
-            "TemplateName_Invoice" => "Standaard template",
-            "TemplateName_Email" => "Standaard template",
+             "CustomerNumber" => $customer->getCustomerNumber(),
+                "InvoiceNotes" =>
+                    (!empty(trim($customerComment)) ? "<h3>Customer Comment: " . nl2br(htmlspecialchars($customerComment)) . "</h3>\n<br>\n" : '') .
+                    "<b>Paymentmethod:</b> " . $order->getTransactions()->first()?->getPaymentMethod()?->getName() . " on " . (new \DateTime())->format('Y-m-d H:i:s') . "<br>\n" .
+                    "<b>OrderNumber:</b> " . $order->getOrderNumber() . "<br>\n" .
+                    "<b>SalesChannel:</b> " . $salesChannel . "<br>\n" ,
+                "InvoiceReference" => $order->getOrderNumber(),
+                "InvoiceDate" => $formattedOrderDate,
+                "TemplateName_Invoice" => "Standaard template",
+                "TemplateName_Email" => "Standaard template",
             "Invoice_Contact" => [
                 [
                     "ContactType" => "Invoice",
@@ -118,19 +133,19 @@ class GeneralSubscriber implements EventSubscriberInterface
                 ]
             ],
             "Invoice_InvoiceLine" => array_values(array_map(function ($lineItem) {
-                /** @var CalculatedPrice $price */
                 $price = $lineItem->getPrice();
                 $unitPriceGross = $price->getUnitPrice();
                 $taxRules = $price->getCalculatedTaxes();
-                $taxPercentage = $taxRules ? $taxRules->first()?->getTaxRate() : 21;
-
-                $taxRate = $taxRules->first() ? $taxRules->first()->getTaxRate() : 21;
+                $taxRate = $taxRules->first()?->getTaxRate() ?? 21;
                 $unitPriceNet = $unitPriceGross / (1 + ($taxRate / 100));
 
+                $payload = $lineItem->getPayload();
+                $productNumber = $payload['productNumber'] ?? 'UNKNOWN';
+
                 return [
-                    "ProductNumber" => $lineItem->getPayload()['productNumber'],
+                    "ProductNumber" => $productNumber,
                     "Quantity" => $lineItem->getQuantity(),
-                    "TaxPc" => $taxPercentage,
+                    "TaxPc" => $taxRate,
                     "UnitPriceExclTax" => round($unitPriceNet, 2),
                     "Description" => $lineItem->getDescription()
                 ];
@@ -140,418 +155,118 @@ class GeneralSubscriber implements EventSubscriberInterface
                     'Address_Street' => $billingAddress->getStreet(),
                     'Address_City' => $billingAddress->getCity(),
                     'Address_PostalCode' => $billingAddress->getZipcode(),
-                    'Address_CountryCode' => !empty($billingAddress->getCountry()->getIso()) ? $billingAddress->getCountry()->getIso() : 'unknown',
+                    'Address_CountryCode' => $billingAddress->getCountry()?->getIso() ?? 'unknown',
                     'Address_Type' => 'InvoiceAddress'
                 ],
                 [
                     'Address_Street' => $shippingAddress->getStreet(),
                     'Address_City' => $shippingAddress->getCity(),
                     'Address_PostalCode' => $shippingAddress->getZipcode(),
-                    'Address_CountryCode' => $shippingAddress->getCountry()->getIso(),
+                    'Address_CountryCode' => $shippingAddress->getCountry()?->getIso() ?? 'unknown',
                     'Address_Type' => 'ShippingAddress'
                 ]
             ]
         ];
 
         try {
-            $response = $this->httpClient->request('POST', (string) $this->apiUrl . '/rest/addsalesinvoice/', [
-                'headers' => [
-                    'Accept-Encoding' => 'gzip,deflate',
-                    'Content-Type' => 'application/json',
-                    'ApiKey' => $this->apiKey,
-                    'Username' => $this->apiUser
-                ],
+            $response = $this->httpClient->request('POST', $this->apiUrl . '/rest/addsalesinvoice/', [
+                'headers' => $this->getApiHeaders(),
                 'json' => $payload
             ]);
 
-            $statusCode = $response->getStatusCode();
-            if ($statusCode !== 200) {
-                $this->logger->error('Silvasoft API error: ' . $response->getContent(false));
-
-            } else {
+            try {
                 $content = $response->getContent(false);
-                
-                $uncompressed = gzdecode($content);
-                $data = json_decode($content, true);
-
-
-                if ($uncompressed === false) {
-                    $this->logger->error('API response decompression failed');
-                } else {
-                    $data = json_decode($uncompressed, true);
-
-                    if (json_last_error() !== JSON_ERROR_NONE) {
-                        $this->logger->error('JSON-Error: ' . json_last_error_msg());
-                    } else {
-
-                        $invNUmber = '';
-
-                        if (isset($data['InvoiceNumber'])) {
-                            $invNUmber = $data['InvoiceNumber'];
-                        } elseif ($data[0] && isset($data[0]['InvoiceNumber'])) {
-                            $invNUmber = $data[0]['InvoiceNumber'];
-                        } else {
-                            $this->logger->error('InvoiceNumber missing in response', ['response' => $data]);
-                        }
-                        
-                        $customFields = $order->getCustomFields() ?? [];
-                        $customFields['silvasoft_ordernumber'] = $invNUmber;
-
-                        $this->orderRepository->upsert([
-                            [
-                                'id' => $order->getId(),
-                                'customFields' => $customFields
-                            ]
-                        ], $event->getContext());
-                    }
-                }
-                $this->logger->info('Order successfully sent to Silvasoft: ' . $order->getOrderNumber());
-            }
-        } catch (\Exception $e) {
-            $this->logger->error('Silvasoft API request failed: ' . $e->getMessage());
-
-
-        }
-    }
-
-    public function onOrderStateChanged(StateMachineStateChangeEvent $event): void
-    {
-        if ($event->getTransition()->getEntityName() === 'order') {
-            $orderId = $event->getTransition()->getEntityId();
-
-            $context = $this->getContext($orderId, $event->getContext());
-            $order = $this->getOrder($orderId, $context);
-
-            $newState = $order->getStateMachineState() ? $order->getStateMachineState()->getTechnicalName() : 'Unknown';
-
-            // Check Custom Field
-            $customFields = $order->getCustomFields() ?? [];
-            $silvasoftOrderNumber = $customFields['silvasoft_ordernumber'] ?? null;
-
-            if (!$silvasoftOrderNumber) {
-                $this->logger->debug(
-                    'Silvasoft update skipped - No order number for: ' . $order->getOrderNumber()
-                );
+                $decoded = @gzdecode($content) ?: $content;
+                $data = json_decode($decoded, true);
+            } catch (\Throwable $e) {
+                $this->logger->error('Response decode failed: ' . $e->getMessage());
                 return;
             }
 
-            // API-Call
-            $this->updateSilvasoftOrder(
-                (string) $silvasoftOrderNumber,
-                $order->getOrderNumber(),
-                $newState
-            );
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                $this->logger->error('JSON decode error: ' . json_last_error_msg());
+                return;
+            }
+
+            $invoiceNumber = $data['InvoiceNumber'] ?? ($data[0]['InvoiceNumber'] ?? null);
+            if (!$invoiceNumber) {
+                $this->logger->error('InvoiceNumber missing in response', ['response' => $data]);
+                return;
+            }
+
+            $customFields = $order->getCustomFields() ?? [];
+            $customFields['silvasoft_ordernumber'] = $invoiceNumber;
+
+            $this->orderRepository->upsert([
+                [
+                    'id' => $order->getId(),
+                    'customFields' => $customFields
+                ]
+            ], $event->getContext());
+
+            $this->logger->info('Order sent to Silvasoft: ' . $order->getOrderNumber());
+        } catch (\Throwable $e) {
+            $this->logger->error('Silvasoft API request failed: ' . $e->getMessage());
         }
     }
 
-    public function onProductWritten(EntityWrittenEvent $event): void
+    private function createSilvasoftCustomerFromOrderContext($orderCustomer, $billingAddress): void
     {
-        foreach ($event->getWriteResults() as $writeResult) {
-            $payload = $writeResult->getPayload();
-            // Check if it is a new product
-            if (!isset($payload['id'])) {
-                continue;
-            }
-
-            $productId = $payload['id'];
-            $product = $this->fetchProductData($productId, $event->getContext());
-
-            if (!$product) {
-                $this->logger->error("Product not found: " . $productId);
-                continue;
-            }
-
-            if ($product->getParentId()) {
-                $mainProduct = $this->getProductById($product->getParentId(), $event->getContext());
-
-                $productNumber = $product->getProductNumber();
-                $name = $product->getTranslation('name') ? $product->getTranslation('name') : $mainProduct->getTranslation('name');
-                $price = $product->getPrice() ? $product->getPrice()->first()->getNet() : $mainProduct->getPrice()->first()->getNet();
-                $categoryName = $this->fetchCategoryName($product);
-                $mainEan = $mainProduct->getEan() ? $mainProduct->getEan() : '';
-                $ean = $product->getEan() ? $product->getEan() : $mainEan;
-
-                $mainUnit = $mainProduct->getUnit() ? $mainProduct->getUnit()->getTranslated()['name'] : '';
-                $unit = $product->getUnit() ? $product->getUnit()->getTranslated()['name'] : $mainUnit;
-                $mainVat = $mainProduct->getTax() ? $mainProduct->getTax()->getTaxRate() : 21;
-                $vat = $product->getTax() ? $product->getTax()->getTaxRate() : $mainVat;
-
-                $mainDescription = $mainProduct->getTranslated()['description'] ? $mainProduct->getTranslated()['description'] : '';
-                $description = $product->getTranslated()['description'] ? $product->getTranslated()['description'] : $mainDescription;
-            } else {
-                $productNumber = $product->getProductNumber();
-                $name = $product->getTranslation('name');
-                $price = $product->getPrice()->first()->getNet();
-                $categoryName = $this->fetchCategoryName($product);
-                $ean = $product->getEan() ? $product->getEan() : '';
-
-                $unit = $product->getUnit() ? $product->getUnit()->getTranslated()['name'] : '';
-                $vat = $product->getTax() ? $product->getTax()->getTaxRate() : 21;
-                $description = $product->getTranslated()['description'] ? $product->getTranslated()['description'] : '';
-            }
-
-            $silvasoftPayload = [
-                "ArticleNumber" => $productNumber,
-                "NewName" => $name,
-                "CategoryName" => $categoryName,
-                "EAN" => $ean,
-                "NewSalePrice" => $price,
-                "NewDescription" => $description,
-                "NewUnit" => $unit,
-                "NewVATPercentage" => $vat,
-            ];
-
-            try {
-                if ($writeResult->getOperation() === 'insert' && isset($payload['productNumber'])) {
-                    $response = $this->httpClient->request('POST', $this->apiUrl . '/rest/addproduct/', [
-                        'headers' => [
-                            'Accept-Encoding' => 'gzip,deflate',
-                            'Content-Type' => 'application/json',
-                            'ApiKey' => $this->apiKey,
-                            'Username' => $this->apiUser
-                        ],
-                        'json' => $silvasoftPayload
-                    ]);
-                }
-                if ($writeResult->getOperation() === 'update') {
-                    $response = $this->httpClient->request('PUT', $this->apiUrl . '/rest/updateproduct/', [
-                        'headers' => [
-                            'Accept-Encoding' => 'gzip,deflate',
-                            'Content-Type' => 'application/json',
-                            'ApiKey' => $this->apiKey,
-                            'Username' => $this->apiUser
-                        ],
-                        'json' => $silvasoftPayload
-                    ]);
-                }
-
-                if ($response->getStatusCode() !== 200) {
-                    $this->logger->error('Silvasoft API error: ' . $response->getContent(false));
-                } else {
-                    $this->logger->info('Product successfully sent to Silvasoft: ' . $productNumber);
-                }
-            } catch (\Exception $e) {
-                $this->logger->error('Silvasoft API Error: ' . $e->getMessage());
-            }
-        }
-    }
-
-    public function onCustomerRegister(CustomerRegisterEvent $event): void
-    {
-        $customer = $event->getCustomer();
-        $address = $customer->getDefaultBillingAddress();
-
         if (!$this->apiKey || !$this->apiUser) {
             $this->logger->error('Silvasoft API credentials are missing.');
             return;
         }
 
+        $customerNumber = $orderCustomer->getCustomerNumber() ?: '';
+        $salutation = $orderCustomer->getSalutation()?->getDisplayName();
+
         $payload = [
-            "Address_City" => $address->getCity() ? $address->getCity() : '',
-            "Address_Street" => $address->getStreet() ? $address->getStreet() : '',
-            "Address_PostalCode" => $address->getZipcode() ? $address->getZipcode() : '',
-            "Address_CountryCode" => $address->getCountry()->getIso() ? $address->getCountry()->getIso() : '',
+            "Address_City" => $billingAddress->getCity() ?: '',
+            "Address_Street" => $billingAddress->getStreet() ?: '',
+            "Address_PostalCode" => $billingAddress->getZipcode() ?: '',
+            "Address_CountryCode" => $billingAddress->getCountry()?->getIso() ?: '',
             "IsCustomer" => true,
-            "CustomerNumber" => $customer->getCustomerNumber() ? $customer->getCustomerNumber() : '',
-            "OnExistingRelationEmail" => "ABORT",
-            "OnExistingRelationNumber" => "ABORT",
-            "OnExistingRelationName" => "ABORT",
+            "CustomerNumber" => $customerNumber,
+            "OnExistingRelationEmail" => "UPDATE",
+            "OnExistingRelationNumber" => "UPDATE",
+           // "OnExistingRelationName" => "ABORT",
             "Relation_Contact" => [
                 [
-                    "Email" => $customer->getEmail(),
-                    "Phone" => $address->getPhoneNumber(),
-                    "FirstName" => $customer->getFirstName(),
-                    "LastName" => $customer->getLastName()
+                    "Email" => $orderCustomer->getEmail(),
+                    "Phone" => $billingAddress->getPhoneNumber(),
+                    "FirstName" => $orderCustomer->getFirstName(),
+                    "LastName" => $orderCustomer->getLastName(),
                 ]
             ]
         ];
 
-        $salutation = $customer->getSalutation()->getDisplayName();
-
-        $salutationMap = [
-            'Herr' => 'Man',
-            'Mr.' => 'Man',
-            'Dhr.' => 'Man',
-            'De heer' => 'Man',
-            'Frau' => 'Woman',
-            'Mrs.' => 'Woman',
-            'Mevr.' => 'Woman',
-            'Mevrouw' => 'Woman',
-            'Fräulein' => 'Woman',
-            'Miss' => 'Woman',
-            'Mej.' => 'Woman',
-            'Mejuffrouw' => 'Woman'
-        ];
-
-        if (!empty($salutationMap[$salutation])) {
-            $payload['Relation_Contact'][0]['Sex'] = $salutationMap[$salutation];
+        $sex = $this->mapSalutationToSex($salutation);
+        if ($sex !== null) {
+            $payload['Relation_Contact'][0]['Sex'] = $sex;
         }
 
         try {
             $response = $this->httpClient->request('POST', $this->apiUrl . '/rest/addprivaterelation/', [
-                'headers' => [
-                    'Content-Type' => 'application/json',
-                    'ApiKey' => $this->apiKey,
-                    'Username' => $this->apiUser,
-                ],
+                'headers' => $this->getApiHeaders(),
                 'json' => $payload
             ]);
 
-            $statusCode = $response->getStatusCode();
-            if ($statusCode !== 200) {
-                $this->logger->error("Error when transferring a customer to Silvasoft API: " . $response->getContent(false));
-            }
-        } catch (\Exception $e) {
-            $this->logger->error("API error: " . $e->getMessage());
-        }
-    }
-
-    private function updateSilvasoftOrder(
-        string $silvasoftOrderNumber,
-        string $shopwareOrderNumber,
-        string $status
-    ): void {
-        $apiUrl = $this->systemConfigService->get('BoodoSyncSilvasoft.config.apiUrl');
-        $apiKey = $this->systemConfigService->get('BoodoSyncSilvasoft.config.apiKey');
-        $apiUser = $this->systemConfigService->get('BoodoSyncSilvasoft.config.apiUser');
-
-        if (!$apiUrl || !$apiKey || !$apiUser) {
-            $this->logger->error('Silvasoft API credentials missing');
-            return;
-        }
-
-        $payload = [
-            'OrderNumber' => (int) $silvasoftOrderNumber,
-            'OrderStatus' => $status,
-            'OrderReference' => $shopwareOrderNumber,
-            'OrderNotes' => 'Status updated: ' . $status,
-            'HtmlAsPlainText' => true
-        ];
-
-        try {
-            $response = $this->httpClient->request(
-                'PUT',
-                $apiUrl . '/rest/updateorder/',
-                [
-                    'headers' => [
-                        'ApiKey' => $apiKey,
-                        'Username' => $apiUser,
-                        'Content-Type' => 'application/json'
-                    ],
-                    'json' => $payload
-                ]
-            );
-
             if ($response->getStatusCode() !== 200) {
-                $this->logger->error(
-                    'Silvasoft update failed for ' . $shopwareOrderNumber .
-                    ' - ' . $response->getContent(false)
-                );
+                $this->logger->error("Silvasoft customer sync error: " . $response->getContent(false));
             }
-
         } catch (\Exception $e) {
-            $this->logger->error(
-                'Silvasoft update error: ' . $e->getMessage() .
-                ' - Payload: ' . json_encode($payload)
-            );
+            $this->logger->error("Silvasoft customer sync exception: " . $e->getMessage());
         }
     }
 
-    private function getContext(string $orderId, Context $context): Context
+    private function mapSalutationToSex(?string $salutation): ?string
     {
-        $order = $this->orderRepository->search(new Criteria([$orderId]), $context)->first();
-
-        if (!$order instanceof OrderEntity) {
-            throw OrderException::orderNotFound($orderId);
-        }
-
-        /** @var CashRoundingConfig $itemRounding */
-        $itemRounding = $order->getItemRounding();
-
-        $orderContext = new Context(
-            $context->getSource(),
-            $order->getRuleIds() ?? [],
-            $order->getCurrencyId(),
-            array_values(array_unique(array_merge([$order->getLanguageId()], $context->getLanguageIdChain()))),
-            $context->getVersionId(),
-            $order->getCurrencyFactor(),
-            true,
-            $order?->getTaxStatus(),
-            $itemRounding
-        );
-
-        $orderContext->addState(...$context->getStates());
-        $orderContext->addExtensions($context->getExtensions());
-
-        return $orderContext;
-    }
-
-    /**
-     * @throws OrderException
-     */
-    private function getOrder(string $orderId, Context $context): OrderEntity
-    {
-        $orderCriteria = $this->getOrderCriteria($orderId, $context);
-
-        $order = $this->orderRepository
-            ->search($orderCriteria, $context)
-            ->first();
-
-        if (!$order instanceof OrderEntity) {
-            throw OrderException::orderNotFound($orderId);
-        }
-
-        return $order;
-    }
-
-    private function getOrderCriteria(string $orderId, Context $context): Criteria
-    {
-        $criteria = new Criteria([$orderId]);
-        $criteria->addAssociation('orderCustomer.salutation');
-        $criteria->addAssociation('orderCustomer.customer');
-        $criteria->addAssociation('stateMachineState');
-        $criteria->addAssociation('deliveries.shippingMethod');
-        $criteria->addAssociation('deliveries.shippingOrderAddress.country');
-        $criteria->addAssociation('deliveries.shippingOrderAddress.countryState');
-        $criteria->addAssociation('salesChannel');
-        $criteria->addAssociation('language.locale');
-        $criteria->addAssociation('transactions.paymentMethod');
-        $criteria->addAssociation('lineItems');
-        $criteria->addAssociation('lineItems.downloads.media');
-        $criteria->addAssociation('currency');
-        $criteria->addAssociation('addresses.country');
-        $criteria->addAssociation('addresses.countryState');
-        $criteria->addAssociation('tags');
-
-        return $criteria;
-    }
-
-    private function fetchProductData(string $productId, Context $context): ?ProductEntity
-    {
-        $criteria = new Criteria([$productId]);
-        $criteria->addAssociation('categories');
-        $criteria->addAssociation('price');
-
-        return $this->productRepository->search($criteria, $context)->first();
-    }
-
-    private function fetchCategoryName(ProductEntity $product): string
-    {
-        $category = $product->getCategories()?->first();
-        return $category ? $category->getTranslation('name') : 'Uncategorized';
-    }
-
-    private function getProductById(string $productId, Context $context): ?ProductEntity
-    {
-        $criteria = new Criteria();
-        $criteria->addFilter(new EqualsFilter('id', $productId));
-        $criteria->addAssociation('tax');
-        $criteria->addAssociation('prices');
-        $criteria->addAssociation('unit');
-
-        /** @var ProductEntity|null $product */
-        $product = $this->productRepository->search($criteria, $context)->first();
-
-        return $product;
+        $map = [
+            'Herr' => 'Man', 'Mr.' => 'Man', 'Dhr.' => 'Man', 'De heer' => 'Man',
+            'Frau' => 'Woman', 'Mrs.' => 'Woman', 'Mevr.' => 'Woman',
+            'Mevrouw' => 'Woman', 'Fräulein' => 'Woman', 'Miss' => 'Woman',
+            'Mej.' => 'Woman', 'Mejuffrouw' => 'Woman'
+        ];
+        return $map[$salutation] ?? null;
     }
 }
