@@ -28,4 +28,14 @@
             <label lang="nl-NL">Api-sleutel</label>
         </input-field>
     </card>
+ <card>
+        <title>Plugin details</title>
+        <input-field type="textarea">
+            <name>manual</name>
+            <label>Manual / Instructions</label>
+            <placeholder>This plugin syncs stock changes from Shopware to Silvasoft when a product is updated.</placeholder>
+            <helpText>see more on https://github.com/Tim-VL/BoodoSyncSilvasoft/</helpText>
+        </input-field>
+    </card>
+    
 </config>
