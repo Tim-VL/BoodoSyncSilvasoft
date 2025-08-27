@@ -18,7 +18,13 @@
     },
     "authors": [
         {
-            "name": "Boodo Connect & NoSite"
+          "name": "NoSite",
+          "email": "contact@nosite.nl",
+          "role": "Maintainer & Developer"
+        }
+        {
+            "name": "Boodo Connect",
+            "role": "Maintainer & Developer"
         }
     ],
     "extra": {
@@ -30,9 +36,9 @@
             "en-GB": "Synchronise Silvasoft ERP with Shopware"
         },
         "description": {
-            "de-DE": "Das Plugin synchronisiert das ERP-System von Silvasoft mit der E-Commerce-Lösung Shopware Version 6.",
-            "nl-NL": "De plugin synchroniseert het Silvasoft ERP-systeem met de e-commerceoplossing van Shopware versie 6.",
-            "en-GB": "The plugin synchronises the Silvasoft ERP system with the Shopware version 6 e-commerce solution."
+            "de-DE": "Das Plugin synchronisiert das ERP-System von Silvasoft mit der E-Commerce-Lösung Shopware 6.x",
+            "nl-NL": "De plugin synchroniseert het Silvasoft ERP-systeem met de e-commerceoplossing van Shopware 6.x",
+            "en-GB": "The plugin synchronises the Silvasoft ERP system with the Shopware 6.x e-commerce solution."
         }
     }
 }
