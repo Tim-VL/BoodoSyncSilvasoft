@@ -17,15 +17,14 @@ use Shopware\Core\Framework\DataAbstractionLayer\Search\Criteria;
 use Shopware\Core\Content\Product\ProductCollection;
 use Shopware\Core\Framework\Context;
 use Psr\Log\LoggerInterface;
-use Shopware\Core\Checkout\Order\OrderEntity;
 
 #[AsCommand('boodo:synchronize:products', 'Exports all existing products to Silvasoft')]
 class ExportProductsToSilvasoftCommand extends Command
 {
-
     private ?string $apiUrl;
     private ?string $apiKey;
     private ?string $apiUser;
+
     public function __construct(
         private readonly SystemConfigService $systemConfigService,
         private readonly HttpClientInterface $httpClient,
@@ -33,6 +32,7 @@ class ExportProductsToSilvasoftCommand extends Command
         private readonly LoggerInterface $logger
     ) {
         parent::__construct();
+
         $this->apiUrl = $this->systemConfigService->get('BoodoSyncSilvasoft.config.apiUrl');
         $this->apiKey = $this->systemConfigService->get('BoodoSyncSilvasoft.config.apiKey');
         $this->apiUser = $this->systemConfigService->get('BoodoSyncSilvasoft.config.apiUser');
@@ -42,6 +42,7 @@ class ExportProductsToSilvasoftCommand extends Command
     {
         $io = new SymfonyStyle($input, $output);
         $io->success('Start products export to Silvasoft');
+
         $context = Context::createDefaultContext();
         $mainProductsArray = [];
 
@@ -63,7 +64,7 @@ class ExportProductsToSilvasoftCommand extends Command
                 ];
             }
         }
-    
+
         if ($products->count() === 0) {
             $io->warning('No products found.');
             return Command::SUCCESS;
@@ -76,7 +77,7 @@ class ExportProductsToSilvasoftCommand extends Command
             $this->sendProductToSilvasoft($product, $mainProductsArray, $io);
             $io->progressAdvance();
 
-            sleep(2);
+            usleep(1400000); // Sleep 1.4 seconds
         }
 
         $io->progressFinish();
@@ -88,7 +89,7 @@ class ExportProductsToSilvasoftCommand extends Command
     private function sendProductToSilvasoft(ProductEntity $product, array $mainProducts, SymfonyStyle $io): void
     {
         $productNumber = $product->getProductNumber();
-        $name = $product->getName() ?? 'Unbekanntes Produkt';
+        $name = $product->getName() ?? 'Unknown Produkt';
         $price = $product->getPrice() ? $product->getPrice()->first()->getNet() : $mainProducts[$product->getParentId()]['priceNet'];
         $ean = $product->getEan() ? $product->getEan() : '';
 
@@ -106,9 +107,8 @@ class ExportProductsToSilvasoftCommand extends Command
             "NewName" => $name,
             "NewDescription" => $product->getDescription() ?? '',
             "NewSalePrice" => $price,
-            "NewUnit" => $unit,
             "NewVATPercentage" => $product->getTax() ? $product->getTax()->getTaxRate() : $mainProducts[$product->getParentId()]['tax'],
-            "EAN" => $ean,
+            "EAN" => preg_replace('/\D/', '', $ean), // Only digits
             "CategoryName" => $categoryName
         ];
 
@@ -127,14 +127,51 @@ class ExportProductsToSilvasoftCommand extends Command
             ]);
 
             if ($response->getStatusCode() !== 200) {
-                $this->logger->error('Silvasoft API error: ' . $response->getContent(false));
-                $this->logger->error('Silvasoft API error when sending the product with the product number: ' . $product->getProductNumber());
-                $io->warning('Silvasoft API error when sending the product with the product number: ' . $product->getProductNumber());
+                $message = 'Silvasoft API error for product ' . $productNumber . ': ' . $response->getContent(false);
+
+                // Existing logger
+                $this->logger->error($message);
+
+                //  Custom log file for sync errors
+                $this->writeSyncErrorLog($message, $silvasoftPayload);
+
+                $io->warning($message);
             } else {
                 $this->logger->info('Product successfully sent to Silvasoft: ' . $productNumber);
             }
         } catch (\Exception $e) {
-            $this->logger->error('Silvasoft API Fehler: ' . $e->getMessage());
+            $message = 'Silvasoft API exception for product ' . $productNumber . ': ' . $e->getMessage();
+
+            // Existing logger
+            $this->logger->error($message);
+
+            // 🆕 Custom log file for sync exceptions
+            $this->writeSyncErrorLog($message, $silvasoftPayload);
         }
+    }
+
+    /**
+     *  Write error to var/log/sync-error-YYYY-MM-DD.log
+     */
+    private function writeSyncErrorLog(string $message, array $payload = []): void
+    {
+        $logDir = dirname(__DIR__, 2) . '/../../../var/log/silvasoft';
+        if (!file_exists($logDir)) {
+            mkdir($logDir, 0777, true);
+        }
+
+        $date = (new \DateTime())->format('Y-m-d');
+        $logPath = $logDir . '/product-sync-' . $date . '.log';
+
+        $timestamp = (new \DateTime())->format('Y-m-d H:i:s');
+        $entry = "[$timestamp] $message\n";
+
+        if (!empty($payload)) {
+            $entry .= json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n";
+        }
+
+        $entry .= str_repeat('-', 80) . "\n";
+
+        file_put_contents($logPath, $entry, FILE_APPEND);
     }
 }

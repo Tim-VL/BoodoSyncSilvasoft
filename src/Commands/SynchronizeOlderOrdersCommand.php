@@ -1,5 +1,12 @@
 <?php
 
+/*
+// UPDATE order
+// SET custom_fields = JSON_REMOVE(custom_fields, '$.silvasoft_ordernumber')
+// WHERE custom_fields LIKE '%silvasoft_ordernumber%';
+*/
+
+
 declare(strict_types=1);
 
 namespace BoodoSyncSilvasoft\Commands;
@@ -25,10 +32,10 @@ use Shopware\Core\Checkout\Order\OrderEntity;
 #[AsCommand('boodo:synchronize:orders', 'Sends all orders to Silvasoft from set date')]
 class SynchronizeOlderOrdersCommand extends Command
 {
-
     private ?string $apiUrl;
     private ?string $apiKey;
     private ?string $apiUser;
+
     public function __construct(
         private readonly SystemConfigService $systemConfigService,
         private readonly HttpClientInterface $httpClient,
@@ -39,29 +46,6 @@ class SynchronizeOlderOrdersCommand extends Command
         $this->apiUrl = $this->systemConfigService->get('BoodoSyncSilvasoft.config.apiUrl');
         $this->apiKey = $this->systemConfigService->get('BoodoSyncSilvasoft.config.apiKey');
         $this->apiUser = $this->systemConfigService->get('BoodoSyncSilvasoft.config.apiUser');
-
-    }
-
-    private function logError(string $message, array $context = []): void
-    {
-        $logEntry = sprintf(
-            "[%s] ERROR: %s | Context: %s\n",
-            date('Y-m-d H:i:s'),
-            $message,
-            json_encode($context, JSON_UNESCAPED_SLASHES)
-        );
-        
-        error_log($logEntry, 3, $this->getLogPath('order-sync_api_errors'));
-    }
-
-    private function getLogPath(string $logType): string
-    {
-        $logDir = dirname(__DIR__) . '/var/log/';
-        if (!file_exists($logDir)) {
-            mkdir($logDir, 0777, true);
-        }
-        
-        return $logDir . '/' . $logType . '.log';
     }
 
     protected function configure(): void
@@ -81,6 +65,7 @@ class SynchronizeOlderOrdersCommand extends Command
         set_error_handler(function($errno, $errstr) {
             return str_contains($errstr, 'User Deprecated') ? true : false;
         }, E_USER_DEPRECATED);
+
         $io = new SymfonyStyle($input, $output);
         $io->success('Start salesinvoice export Silvasoft');
 
@@ -94,21 +79,12 @@ class SynchronizeOlderOrdersCommand extends Command
         $criteria->addAssociation('salesChannel');
         $criteria->addAssociation('transactions.paymentMethod');
 
-        // $criteria->addFilter(new NotFilter(NotFilter::CONNECTION_AND, [
-        //    new EqualsFilter('stateMachineState.technicalName', 'cancelled')
-        // ]));
-
         $criteria->addFilter(new NotFilter(NotFilter::CONNECTION_OR, [
-        new EqualsFilter('stateMachineState.technicalName', 'cancelled'),
-        new EqualsFilter('stateMachineState.technicalName', 'open')
+            new EqualsFilter('stateMachineState.technicalName', 'cancelled'),
+            new EqualsFilter('stateMachineState.technicalName', 'open')
         ]));
 
-        // $criteria->addFilter(
-        //     new EqualsFilter('stateMachineState.technicalName', 'done')
-        // );
-        
         $dateString = $input->getOption('date');
-        
         if ($dateString) {
             try {
                 $fromDate = new \DateTime($dateString);
@@ -119,13 +95,9 @@ class SynchronizeOlderOrdersCommand extends Command
                 return Command::FAILURE;
             }
         } else {
-            // Use original hardcoded filter when no date is provided
             $criteria->addFilter(new RangeFilter('orderDateTime', ['gte' => (new \DateTime('2025-01-01'))->format(DATE_ATOM)]));
         }
 
-        /**
-         * @var OrderCollection
-         */
         $orders = $this->orderRepository->search($criteria, $context)->getEntities();
 
         if ($orders->count() === 0) {
@@ -135,56 +107,40 @@ class SynchronizeOlderOrdersCommand extends Command
 
         $io->progressStart($orders->count());
 
-        /** @var OrderEntity $order */
         foreach ($orders as $order) {
-
             $customFields = $order->getCustomFields() ?? [];
 
             if (isset($customFields['silvasoft_ordernumber']) && !empty($customFields['silvasoft_ordernumber'])) {
-
-                $this->logger->info(
-                    'Invoice ' . $order->getOrderNumber() . ' already synced with Silvasoft ID: ' . $customFields['silvasoft_ordernumber']
-                );
-                $io->note('Skipping already synced invoice: ' . $order->getOrderNumber());
+                $this->logger->info('Invoice ' . $order->getOrderNumber() . ' already synced.');
+                $io->note('Skipping already synced (sw-customfield): ' . $order->getOrderNumber());
                 continue;
             }
 
             $customer = $order->getOrderCustomer();
             $billingAddress = $order->getBillingAddress();
-            $shippingAddress = $order->getDeliveries() ? $order->getDeliveries()->first()->getShippingOrderAddress() : null;
+            $shippingAddress = $order->getDeliveries()?->first()?->getShippingOrderAddress();
 
             if (!$billingAddress || !$shippingAddress) {
-                $this->logger->error('Billing or Shipping address is missing for order ID: ' . $order->getOrderNumber());
-                return Command::FAILURE;
+                $this->logger->error('Missing billing or shipping address for order: ' . $order->getOrderNumber());
+                continue;
             }
 
-            $orderStatus = $order->getStateMachineState() ? $order->getStateMachineState()->getTechnicalName() : 'Unknown';
-            $orderDate = $order->getOrderDateTime();
-            $formattedOrderDate = $orderDate ? $orderDate->format('d-m-Y') : date('d-m-Y');
-
-            if (!$this->apiKey || !$this->apiUser) {
-                $this->logger->error('Silvasoft API credentials not set.');
-                return Command::FAILURE;
-            }
-
-            $paymentMethod = $order->getTransactions()->first()?->getPaymentMethod()?->getName() ?? '';
+            $formattedOrderDate = $order->getOrderDateTime()?->format('d-m-Y') ?? date('d-m-Y');
             $salesChannel = $order->getSalesChannel()?->getTranslated()['name'] ?? '';
             $customerComment = $order->getCustomerComment() ?? '';
 
+            // Initial payload using CustomerEmail
             $payload = [
                 //"CustomerNumber" => $customer->getCustomerNumber(), // sync based on customernr
-				"CustomerEmail" => strtolower($customer->getEmail()), // sync based on email 
+                "CustomerEmail" => strtolower($customer->getEmail()),
                 "InvoiceNotes" =>
                     (!empty(trim($customerComment)) ? "<h3>Customer Comment: " . nl2br(htmlspecialchars($customerComment)) . "</h3>\n<br>\n" : '') .
-                    "<b>Paymentmethod:</b> " . $order->getTransactions()->first()?->getPaymentMethod()?->getName() . " on " . (new \DateTime())->format('Y-m-d H:i:s') . "<br>\n" .
+                    "<b>Paymentmethod:</b> " . $order->getTransactions()->first()?->getPaymentMethod()?->getName() .
                     "<b>OrderNumber:</b> " . $order->getOrderNumber() . "<br>\n" .
-                    "<b>SalesChannel:</b> " . $salesChannel . "<br>\n" ,
+                    "<b>SalesChannel:</b> " . $salesChannel . "<br>\n" .
+                    "<b>API Sync:</b> " . (new \DateTime())->format('c') . "<br>\n",
                 "InvoiceReference" => $order->getOrderNumber(),
                 "InvoiceDate" => $formattedOrderDate,
-             //   "TemplateName_Invoice" => "Standaard template",
-             //   "TemplateName_Email" => "Standaard template",
-             //   "PackingSlipNotes" => "Extra note to be added to the packing-slip",
-
                 "Invoice_Contact" => [
                     [
                         "ContactType" => "Invoice",
@@ -200,9 +156,8 @@ class SynchronizeOlderOrdersCommand extends Command
                         "LastName" => $customer->getLastName(),
                         "DefaultContact" => true
                     ]
-                ], 
-
-              "Invoice_Address" => [
+                ],
+                "Invoice_Address" => [
                     [
                         'Address_Street' => $billingAddress->getStreet(),
                         'Address_City' => $billingAddress->getCity(),
@@ -218,33 +173,82 @@ class SynchronizeOlderOrdersCommand extends Command
                         'Address_Type' => 'ShippingAddress'
                     ]
                 ],
-
                 "Invoice_InvoiceLine" => array_values(array_map(function ($lineItem) {
-
                     $price = $lineItem->getPrice();
+                    $taxRate = $price->getCalculatedTaxes()?->first()?->getTaxRate() ?? 21;
                     $unitPriceGross = $price->getUnitPrice();
-                    $taxRules = $price->getCalculatedTaxes();
-                    $taxPercentage = $taxRules ? $taxRules->first()?->getTaxRate() : 21;
-
-                    $taxRate = $taxRules->first() ? $taxRules->first()->getTaxRate() : 21;
                     $unitPriceNet = $unitPriceGross / (1 + ($taxRate / 100));
-
                     return [
-                        //"ProductNumber" => $lineItem->getProduct() ? $lineItem->getProduct()->getProductNumber() : '',
+                        "ProductNumber" => $lineItem->getProduct()?->getProductNumber() ?? 'UNK',
+                        "Quantity" => $lineItem->getQuantity(),
+                        "TaxPc" => $taxRate,
+                        "UnitPriceExclTax" => $unitPriceNet,
+                        "Description" => $lineItem->getLabel() ?? 'API - No line description retrieved'
+                    ];
+                }, $order->getLineItems()?->getElements() ?? []))
+            ];
+
+             $payload2 = [
+                "CustomerNumber" => $customer->getCustomerNumber(), // sync based on customernr
+                //"CustomerEmail" => strtolower($customer->getEmail()),
+                "InvoiceNotes" =>
+                    (!empty(trim($customerComment)) ? "<h3>Customer Comment: " . nl2br(htmlspecialchars($customerComment)) . "</h3>\n<br>\n" : '') .
+                    "<b>Paymentmethod:</b> " . $order->getTransactions()->first()?->getPaymentMethod()?->getName() .
+                    "<b>OrderNumber:</b> " . $order->getOrderNumber() . "<br>\n" .
+                    "<b>SalesChannel:</b> " . $salesChannel . "<br>\n" .
+                    "<b>API Sync:</b> " . (new \DateTime())->format('c') . "<br>\n",
+                "InvoiceReference" => $order->getOrderNumber(),
+                "InvoiceDate" => $formattedOrderDate,
+                "Invoice_Contact" => [
+                    [
+                        "ContactType" => "Invoice",
+                        "Email" => strtolower($customer->getEmail()),
+                        "FirstName" => $customer->getFirstName(),
+                        "LastName" => $customer->getLastName(),
+                        "DefaultContact" => true
+                    ],
+                    [
+                        "ContactType" => "PackingSlip",
+                        "Email" => $customer->getEmail(),
+                        "FirstName" => $customer->getFirstName(),
+                        "LastName" => $customer->getLastName(),
+                        "DefaultContact" => true
+                    ]
+                ],
+                "Invoice_Address" => [
+                    [
+                        'Address_Street' => $billingAddress->getStreet(),
+                        'Address_City' => $billingAddress->getCity(),
+                        'Address_PostalCode' => $billingAddress->getZipcode(),
+                        'Address_CountryCode' => $billingAddress->getCountry()->getIso(),
+                        'Address_Type' => 'InvoiceAddress'
+                    ],
+                    [
+                        'Address_Street' => $shippingAddress->getStreet(),
+                        'Address_City' => $shippingAddress->getCity(),
+                        'Address_PostalCode' => $shippingAddress->getZipcode(),
+                        'Address_CountryCode' => $shippingAddress->getCountry()->getIso(),
+                        'Address_Type' => 'ShippingAddress'
+                    ]
+                ],
+                "Invoice_InvoiceLine" => array_values(array_map(function ($lineItem) {
+                    $price = $lineItem->getPrice();
+                    $taxRate = $price->getCalculatedTaxes()?->first()?->getTaxRate() ?? 21;
+                    $unitPriceGross = $price->getUnitPrice();
+                    $unitPriceNet = $unitPriceGross / (1 + ($taxRate / 100));
+                    return [
                         "ProductNumber" => $lineItem->getProduct()?->getProductNumber() ?? 'UNKNOWN_PRODUCT',
                         "Quantity" => $lineItem->getQuantity(),
-                        "TaxPc" => $taxPercentage,
+                        "TaxPc" => $taxRate,
                         "UnitPriceExclTax" => $unitPriceNet,
-                       // "Description" => $lineItem->getDescription() // Invoice line description
-                       // "Description" => $lineItem->getDescription() ?? $lineItem->getLabel() ?? 'No description'
-                       "Description" => $lineItem->getLabel() ?? 'API - No line description retrived'
+                        "Description" => $lineItem->getLabel() ?? 'API - No line description retrieved'
                     ];
-                }, $order->getLineItems()?->getElements() ?? [])),
-                
+                }, $order->getLineItems()?->getElements() ?? []))
             ];
 
             try {
-                $response = $this->httpClient->request('POST', (string) $this->apiUrl . '/rest/addsalesinvoice/', [
+                // First API call
+                $response = $this->httpClient->request('POST', $this->apiUrl . '/rest/addsalesinvoice/', [
                     'headers' => [
                         'Accept-Encoding' => 'gzip,deflate',
                         'Content-Type' => 'application/json',
@@ -253,71 +257,90 @@ class SynchronizeOlderOrdersCommand extends Command
                     ],
                     'json' => $payload
                 ]);
+                sleep(2); // Sleep 2 seconds
 
                 $statusCode = $response->getStatusCode();
-                if ($statusCode !== 200) {
-                    $this->logger->error('Silvasoft API error: ' . $response->getContent(false));
-                    $io->warning('Silvasoft API error when sending the order with the order number: ' . $order->getOrderNumber());
-                    $this->logError("API failed", ['status' => $statusCode, 'content' => json_decode($response->getContent(false), true), 'payload' => $payload]);
+                $content = $response->getContent(false);
+                $json = json_decode($content, true);
 
-                } else {
+                // Retry logic if relation not found
+                if ($statusCode === 400) {
+                    $io->warning("Retrying with Customernumber for order: " . $order->getOrderNumber());
+                    $this->logger->warning("Retrying with CustomerNumber for order: " . $order->getOrderNumber());
+
+                    sleep(2); // Sleep 2 seconds
+
+                    $response = $this->httpClient->request('POST', $this->apiUrl . '/rest/addsalesinvoice/', [
+                        'headers' => [
+                            'Accept-Encoding' => 'gzip,deflate',
+                            'Content-Type' => 'application/json',
+                            'ApiKey' => $this->apiKey,
+                            'Username' => $this->apiUser
+                        ],
+                        'json' => $payload2
+                    ]);
+
+                    $statusCode = $response->getStatusCode();
                     $content = $response->getContent(false);
-
-                    $data = json_decode($content, true);                    
-                    
-                    if (json_last_error() !== JSON_ERROR_NONE) {
-                        $uncompressed = @gzdecode($content); 
-                        if ($uncompressed !== false) {
-                            $data = json_decode($uncompressed, true);
-                        }
-                    }
-                    
-                    // Now validate the data
-                    if (!is_array($data)) {
-                        $this->logger->error('Invalid API response format');
-                        $io->warning('Failed to process Silvasoft response for order: ' . $order->getOrderNumber());
-                        $this->logError("API failed", ['status' => $statusCode, 'content' => $data . "\n\n"]);
-                        continue; 
-                    }
-                    
-                    
-                    if (isset($data['InvoiceNumber'])) { 
-                        $invoiceNumber = $data['InvoiceNumber'];
-                    } elseif (isset($data[0]['InvoiceNumber'])) { 
-                        $invoiceNumber = $data[0]['InvoiceNumber'];
-                    } else {
-                        $this->logger->error('InvoiceNumber missing in response', ['response' => $data]);
-                        continue;
-                    }
-                    
-                    // Update order
-                    if (!isset($customFields['silvasoft_ordernumber'])) {
-                        $this->orderRepository->upsert([
-                            [
-                                'id' => $order->getId(),
-                                'customFields' => array_merge($customFields, [
-                                    'silvasoft_ordernumber' => $invoiceNumber
-                                ])
-                            ]
-                        ], $context);
-                        
-                        $this->logger->info('Silvasoft invoice number saved', [
-                            'order' => $order->getOrderNumber(),
-                            'silvasoft_id' => $invoiceNumber
-                        ]);
-                    }
+                    $json = json_decode($content, true);
                 }
-            } catch (\Exception $e) {
-                $this->logger->error('Silvasoft API request failed: ' . $e->getMessage());
-                $this->logger->error('Silvasoft API error PAYLOAD: ' . json_encode($payload, JSON_PRETTY_PRINT));
 
-                $this->logError("API failed", ['message' => $e->getMessage(), 'content' => $payload . "\n\n" ]);
-                restore_error_handler();
+                if ($statusCode !== 200) {
+                    $this->logger->error('Silvasoft API error: ' . $content);
+                    $io->warning('Silvasoft API error on order ' . $order->getOrderNumber());
+                    continue;
+                }
+
+                $invoiceNumber = $json['InvoiceNumber'] ?? ($json[0]['InvoiceNumber'] ?? null);
+
+                if (!$invoiceNumber) {
+                    $this->logger->error('InvoiceNumber not found in response.', ['response' => $json]);
+                    continue;
+                }
+
+                $this->orderRepository->upsert([
+                    [
+                        'id' => $order->getId(),
+                        'customFields' => array_merge($customFields, [
+                            'silvasoft_ordernumber' => $invoiceNumber
+                        ])
+                    ]
+                ], $context);
+
+                $this->logger->info('Silvasoft invoice number saved', [
+                    'order' => $order->getOrderNumber(),
+                    'silvasoft_id' => $invoiceNumber
+                ]);
+            } catch (\Exception $e) {
+                $this->logger->error('Silvasoft API exception: ' . $e->getMessage());
+                continue;
             }
-            usleep(1200000); // Sleep 1.2 seconds
-            //sleep(2);
+
+            usleep(2000000); // Sleep 1.6 seconds
         }
+
         $io->progressFinish();
         return self::SUCCESS;
+    }
+
+    private function logError(string $message, array $context = []): void
+    {
+        $logEntry = sprintf(
+            "[%s] ERROR: %s | Context: %s\n",
+            date('Y-m-d H:i:s'),
+            $message,
+            json_encode($context, JSON_UNESCAPED_SLASHES)
+        );
+        $date = (new \DateTime())->format('Y-m-d');
+        error_log($logEntry, 3, $this->getLogPath('order-sync-' . $date));
+    }
+
+    private function getLogPath(string $logType): string
+    {
+        $logDir = dirname(__DIR__) . '/../../../../var/log/silvasoft/';
+        if (!file_exists($logDir)) {
+            mkdir($logDir, 0777, true);
+        }
+        return $logDir . '/' . $logType . '.log';
     }
 }
