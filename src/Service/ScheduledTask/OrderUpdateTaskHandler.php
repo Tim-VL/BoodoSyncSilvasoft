@@ -21,216 +21,70 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
 use Psr\Log\LoggerInterface;
 
 #[AsMessageHandler(handles: OrderUpdateTask::class)]
-class OrderUpdateTaskHandler extends ScheduledTaskHandler
+class OrderSyncTaskHandler extends ScheduledTaskHandler
 {
-    private const LIMIT = 100;
-    private ?string $apiUrl;
-    private ?string $apiKey;
-    private ?string $apiUser;
     public function __construct(
-        EntityRepository $scheduledTaskRepository,
-        private readonly SystemConfigService $systemConfigService,
-        private readonly HttpClientInterface $httpClient,
-        private readonly EntityRepository $productRepository,
-        private readonly EntityRepository $categoryRepository,
+        private readonly OrderSyncService $orderSyncService,
+        private readonly EntityRepository $orderRepository,
         private readonly LoggerInterface $logger
     ) {
-        parent::__construct($scheduledTaskRepository);
-        $this->apiUrl = $this->systemConfigService->get(key: 'BoodoSyncSilvasoft.config.apiUrl');
-        $this->apiKey = $this->systemConfigService->get('BoodoSyncSilvasoft.config.apiKey');
-        $this->apiUser = $this->systemConfigService->get('BoodoSyncSilvasoft.config.apiUser');
+        parent::__construct();
     }
+
+    public static function getHandledMessages(): iterable
+    {
+        return [OrderSyncTask::class];
+    }
+
     public function run(): void
     {
         $context = Context::createDefaultContext();
-        $offset = 0;
-        $totalShopwareProducts = $this->getShopwareProductCount($context);
-        while ($offset < $totalShopwareProducts) {
-            $products = $this->fetchProductsFromSilvasoft($offset, self::LIMIT);
-            if (empty($products)) {
-                break;
-            }
-            $this->updateShopwareStockAndCategory($products, $context);
-            $offset += self::LIMIT;
-        }
-    }
 
-    private function fetchProductsFromSilvasoft(int $offset, int $limit): array
-    {
-        $maxRetries = 5;
-        $retryDelay = 5;
-    
-        for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
-            try {
-                $response = $this->httpClient->request('GET', $this->apiUrl . '/rest/listproducts', [
-                    'headers' => [
-                        'Content-Type' => 'application/json',
-                        'ApiKey' => $this->apiKey,
-                        'Username' => $this->apiUser
-                    ],
-                    'query' => [
-                        'Limit' => $limit,
-                        'Offset' => $offset,
-                        'IncludeStockPositions' => true
-                    ]
-                ]);
-    
-                return json_decode($response->getContent(), true) ?? [];
-    
-            } catch (ClientException $e) {
-                if ($e->getCode() === 429) {
-                    $this->logger->warning(sprintf(
-                        'Rate limit reached (429). Attempt %d from %d. Wait %d seconds...',
-                        $attempt, $maxRetries, $retryDelay
-                    ));
-    
-                    sleep($retryDelay);
-                    continue;
+        try {
+            // Build criteria to find unsynced orders (e.g. via custom field or tag)
+            $criteria = new Criteria();
+            $criteria->addFilter(new EqualsFilter('customFields.silvasoft_synced', false));
+            $criteria->addAssociation('lineItems');
+            $criteria->addAssociation('billingAddress.country');
+            $criteria->addAssociation('deliveries.shippingOrderAddress.country');
+            $criteria->addAssociation('transactions.paymentMethod');
+            $criteria->addAssociation('orderCustomer.customer');
+
+            $orders = $this->orderRepository->search($criteria, $context);
+
+            if ($orders->count() === 0) {
+                $this->logger->info('Silvasoft Order Sync: No unsynced orders found.');
+                return;
+            }
+
+            foreach ($orders as $order) {
+                try {
+                    $this->orderSyncService->syncOrder($order, $context);
+
+                    // Optional: mark order as synced
+                    $order->setCustomFields(array_merge($order->getCustomFields() ?? [], [
+                        'silvasoft_synced' => true
+                    ]));
+
+                    $this->orderRepository->update([[
+                        'id' => $order->getId(),
+                        'customFields' => $order->getCustomFields()
+                    ]], $context);
+
+                    $this->logger->info('Silvasoft Order Sync: Order synced.', [
+                        'orderNumber' => $order->getOrderNumber()
+                    ]);
+                } catch (\Throwable $e) {
+                    $this->logger->error('Silvasoft Order Sync: Failed to sync order.', [
+                        'orderId' => $order->getId(),
+                        'error' => $e->getMessage()
+                    ]);
                 }
-                throw $e;
             }
+        } catch (\Throwable $e) {
+            $this->logger->error('Silvasoft Order Sync: Fatal error.', [
+                'error' => $e->getMessage()
+            ]);
         }
-    
-        $this->logger->error('Maximum number of repetitions achieved when retrieving products with offset ' . $offset);
-        return [];
-    }
-    
-
-    private function updateShopwareStockAndCategory(array $silvasoftProducts, Context $context): void
-    {
-        $productNumbers = [];
-        $stockCategoryData = [];
-
-        $offset = 0;
-        foreach ($silvasoftProducts as $product) {
-            if (!empty($product['ArticleNumber']) && isset($product['StockQty'])) {
-                $productNumbers[] = $product['ArticleNumber'];
-                // $stockData[$product['ArticleNumber']] = $product['StockQty'];
-                $stockCategoryData[$product['ArticleNumber']] = [
-                    'StockQty' => $product['StockQty'],
-                    'category_tree' => isset($product['ProductResponse_CustomField']) &&
-                        isset($product['ProductResponse_CustomField'][0]) &&
-                        $product['ProductResponse_CustomField'][0]['Label'] === "shopware_category"
-                        ? $product['ProductResponse_CustomField'][0] : null
-                ];
-            }
-        }
-        $this->logger->error('Silvasoft Products numbers Data: ' . json_encode($productNumbers, JSON_PRETTY_PRINT));
-        if (empty($productNumbers)) {
-            return;
-        }
-
-        // Produkte aus Shopware anhand der Artikelnummern abrufen
-        $criteria = new Criteria();
-        $criteria->addFilter(new EqualsAnyFilter('productNumber', $productNumbers));
-        $products = $this->productRepository->search($criteria, $context)->getEntities();
-
-        if ($products->count() === 0) {
-            return;
-        }
-
-        // Bestand für alle gefundenen Produkte aktualisieren
-        $updates = [];
-        /** @var ProductEntity $shopwareProduct */
-        foreach ($products as $shopwareProduct) {
-            $productNumber = $shopwareProduct->getProductNumber();
-            if (isset($stockCategoryData[$productNumber])) {
-                $updateItem = [
-                    'id' => $shopwareProduct->getId(),
-                    'stock' => $stockCategoryData[$productNumber]['StockQty']
-                ];
-
-                if (
-                    isset($stockCategoryData[$productNumber]['category_tree']) &&
-                    isset($stockCategoryData[$productNumber]['category_tree']['StringValue'])
-                ) {
-                    $this->importCategoryTree(
-                        $stockCategoryData[$productNumber]['category_tree']['StringValue'],
-                        $shopwareProduct->getId(),
-                        $updateItem
-                    );
-                }
-                $updates[] = $updateItem;
-            }
-        }
-
-        if (!empty($updates)) {
-            $this->productRepository->upsert($updates, $context);
-        }
-    }
-
-    private function getShopwareProductCount(Context $context): int
-    {
-        $criteria = new Criteria();
-        $criteria->addAggregation(new CountAggregation('totalProducts', 'id'));
-
-        $result = $this->productRepository->search($criteria, $context);
-        /** @var CountResult|null $count */
-        $count = $result->getAggregations()->get('totalProducts');
-
-        return $count ? $count->getCount() : 0;
-    }
-
-    public function importCategoryTree(string $categoryTree, string $productId, array &$updateItem): void
-    {
-        if (!empty($categoryTree)) {
-            $categories = explode('>', $categoryTree);
-            $categories = array_map('trim', $categories);
-
-            $parentId = null;
-            $currentCategoryId = null;
-
-            foreach ($categories as $categoryName) {
-                $currentCategoryId = $this->getOrCreateCategory($categoryName, $parentId);
-                $parentId = $currentCategoryId;
-            }
-
-            if ($currentCategoryId) {
-                $updateItem['id'] = $productId;
-                $updateItem['categories'] = [
-                    ['id' => $currentCategoryId]
-                ];
-
-            }
-        }
-    }
-
-    private function getOrCreateCategory(string $name, ?string $parentId): string
-    {
-        $criteria = new Criteria();
-        $criteria->addFilter(new EqualsFilter('name', $name));
-        $criteria->addFilter(new EqualsFilter('parentId', $parentId));
-        $criteria->addAssociation('parent');
-
-        $existingCategory = $this->categoryRepository->search($criteria, Context::createDefaultContext())->first();
-
-        if ($existingCategory) {
-            return $existingCategory->getId();
-        }
-
-        $newCategoryId = Uuid::randomHex();
-
-        $this->categoryRepository->create([
-            [
-                'id' => $newCategoryId,
-                'name' => $name,
-                'parentId' => $parentId,
-                'active' => true,
-            ]
-        ], Context::createDefaultContext());
-
-        return $newCategoryId;
-    }
-
-    private function assignProductToCategory(string $productId, string $categoryId): void
-    {
-        $this->productRepository->upsert([
-            [
-                'id' => $productId,
-                'categories' => [
-                    ['id' => $categoryId]
-                ]
-            ]
-        ], Context::createDefaultContext());
     }
 }
