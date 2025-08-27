@@ -3,20 +3,20 @@
         xsi:noNamespaceSchemaLocation="https://raw.githubusercontent.com/shopware/platform/trunk/src/Core/System/SystemConfig/Schema/config.xsd">
 
     <card>
-        <title>Connection with Silvasoft</title>
-        <title lang="de-DE">Verbindung mit Silvasoft</title>
-        <title lang="nl-NL">Connectie met Silvasoft</title>
+        <title>Connection with Silvasoft ERP</title>
+        <title lang="de-DE">Verbindung mit Silvasoft ERP</title>
+        <title lang="nl-NL">Connectie met Silvasoft ERP</title>
 
         <input-field type="text">
             <name>apiUrl</name>
-            <label>API URL</label>
+            <label>API URL for Silvasoft ERP</label>
             <label lang="de-DE">API-URL</label>
             <label lang="nl-NL">API-URL</label>
         </input-field>
 
         <input-field type="text">
             <name>apiUser</name>
-            <label>API User</label>
+            <label>API User (full e-mail)</label>
             <label lang="de-DE">API-Benutzer</label>
             <label lang="nl-NL">API-gebruiker</label>
         </input-field>
