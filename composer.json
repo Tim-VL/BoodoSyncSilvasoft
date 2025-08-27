@@ -1,12 +1,13 @@
 {
     "name": "boodo/sync-silvasoft",
-    "version": "2.2.0",
-    "description": "The plugin synchronises the Silvasoft ERP system with the Shopware version 6 e-commerce solution.",
+    "version": "3.0.0",
+    "description": "The plugin synchronises the Silvasoft ERP system with the Shopware version 6 e-commerce solution. In version 3 the sync is chnaged to a schedule task and not via the Event action, also manual trigger is added.",
     "type": "shopware-platform-plugin",
     "license": "proprietary",
     "keywords": [
         "shopware",
         "erp",
+        "silvasoft",
         "product",
         "sync"
     ],
@@ -17,18 +18,20 @@
     },
     "authors": [
         {
-            "name": "Boodo Connect"
+            "name": "Boodo Connect & NoSite"
         }
     ],
     "extra": {
         "shopware-plugin-class": "BoodoSyncSilvasoft\\BoodoSyncSilvasoft",
-        "copyright": "(c) by Boodo Connect",
+        "copyright": "(c) by NoSite",
         "label": {
-            "de-DE": "BOODO - Synchronisiere Silvasoft mit Shopware",
-            "en-GB": "BOODO - Synchronise Silvasoft with Shopware"
+            "de-DE": "Synchronisiere Silvasoft ERP mit Shopware",
+            "nl-NL": "Synchroniseer Silvasoft ERP met Shopware",
+            "en-GB": "Synchronise Silvasoft ERP with Shopware"
         },
         "description": {
             "de-DE": "Das Plugin synchronisiert das ERP-System von Silvasoft mit der E-Commerce-Lösung Shopware Version 6.",
+            "nl-NL": "De plugin synchroniseert het Silvasoft ERP-systeem met de e-commerceoplossing van Shopware versie 6.",
             "en-GB": "The plugin synchronises the Silvasoft ERP system with the Shopware version 6 e-commerce solution."
         }
     }
