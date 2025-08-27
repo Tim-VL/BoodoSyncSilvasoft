@@ -9,7 +9,6 @@ use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Shopware\Core\Checkout\Customer\CustomerEntity;
 use Shopware\Core\Checkout\Customer\CustomerCollection;
-use Shopware\Core\Checkout\Customer\Aggregate\CustomerAddress\CustomerAddressEntity;
 use Shopware\Core\Framework\Context;
 use Shopware\Core\Framework\DataAbstractionLayer\EntityRepository;
 use Shopware\Core\Framework\DataAbstractionLayer\Search\Criteria;
@@ -23,7 +22,7 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
 use Psr\Log\LoggerInterface;
 
-#[AsCommand('boodo:synchronize:customer', 'Exports all existing customer to Silvasoft from set date')]
+#[AsCommand('boodo:synchronize:customer', 'Exports all existing customers to Silvasoft from set date')]
 class SynchronizeCustomerWithSilvasoftCommand extends Command
 {
     private ?string $apiUrl;
@@ -51,13 +50,20 @@ class SynchronizeCustomerWithSilvasoftCommand extends Command
                 InputOption::VALUE_REQUIRED,
                 'Filter Customers from this date (format: YYYY-MM-DD)',
                 null
+            )
+            ->addOption(
+                'from-customer-number',
+                null,
+                InputOption::VALUE_REQUIRED,
+                'Sync only customers with customer number >= this number',
+                null
             );
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io = new SymfonyStyle($input, $output);
-        $io->success('Start customers export to Silvasoft 2020-01-01 OR with with Date filter');
+        $io->success('Start customers export to Silvasoft for ALL customers OR via date OR from customer nr.');
 
         $context = Context::createDefaultContext();
 
@@ -68,15 +74,17 @@ class SynchronizeCustomerWithSilvasoftCommand extends Command
         $criteria->addAssociation('defaultBillingAddress.country');
         $criteria->addAssociation('salutation');
 
+        /*
         $criteria->addFilter(
             new NotFilter(
                 NotFilter::CONNECTION_AND,
-                [new EqualsFilter('lastLogin', null)]
+                [new EqualsFilter('lastLogin', null)]  // filter customers with login
             )
         );
-
+        */
+        
+        // Date filter
         $dateString = $input->getOption('date');
-
         if ($dateString) {
             try {
                 $fromDate = new \DateTime($dateString);
@@ -87,7 +95,21 @@ class SynchronizeCustomerWithSilvasoftCommand extends Command
                 return Command::FAILURE;
             }
         } else {
-            $criteria->addFilter(new RangeFilter('createdAt', ['gte' => (new \DateTime('2020-01-01'))->format(DATE_ATOM)]));
+           // $criteria->addFilter(new RangeFilter('createdAt', ['gte' => (new \DateTime('2020-01-01'))->format(DATE_ATOM)]));
+        }
+
+        // Customer number filter
+        $fromCustomerNumber = $input->getOption('from-customer-number');
+        if ($fromCustomerNumber !== null) {
+            if (!is_numeric($fromCustomerNumber)) {
+                $io->error('The "from-customer-number" must be a numeric value.');
+                return Command::FAILURE;
+            }
+
+            $io->info(sprintf('Filtering customers with customer number >= %s', $fromCustomerNumber));
+            $criteria->addFilter(
+                new RangeFilter('customerNumber', ['gte' => (string) $fromCustomerNumber])
+            );
         }
 
         /** @var CustomerCollection $customers */
@@ -101,21 +123,42 @@ class SynchronizeCustomerWithSilvasoftCommand extends Command
         $io->note(sprintf('Found %d customers to sync', $customers->count()));
         $io->progressStart($customers->count());
 
+        $synced = 0;
+        $skipped = 0;
+        $errors = 0;
+
         foreach ($customers as $customer) {
-            $this->sendCustomerToSilvasoft($customer, $io);
+            $result = $this->sendCustomerToSilvasoft($customer, $io);
+
+            if ($result === 'synced') {
+                $synced++;
+            } elseif ($result === 'skipped') {
+                $skipped++;
+            } elseif ($result === 'error') {
+                $errors++;
+            }
+
             $io->progressAdvance();
-            usleep(1400000); // Sleep 1.4 seconds
+            usleep(2100000); // 2.1 second between API calls NORMAL=1.2
         }
 
         $io->progressFinish();
-        $io->success(sprintf('Customer export complete — %d customers processed.', $customers->count()));
+
+        $summary = sprintf('Synced: %d | Skipped: %d | Errors: %d', $synced, $skipped, $errors);
+        $io->success('Customer export complete');
+        $io->text($summary);
+
+        $this->logError('SUMMARY', [
+            'synced' => $synced,
+            'skipped' => $skipped,
+            'errors' => $errors
+        ]);
 
         return Command::SUCCESS;
     }
 
-    private function sendCustomerToSilvasoft(CustomerEntity $customer, SymfonyStyle $io): void
+    private function sendCustomerToSilvasoft(CustomerEntity $customer, SymfonyStyle $io): string
     {
-        /** @var CustomerAddressEntity|null $address */
         $address = $customer->getDefaultBillingAddress()
             ?? $customer->getDefaultShippingAddress()
             ?? ($customer->getAddresses() ? $customer->getAddresses()->first() : null);
@@ -123,22 +166,18 @@ class SynchronizeCustomerWithSilvasoftCommand extends Command
         if (!$this->apiKey || !$this->apiUser) {
             $this->logger->error('Silvasoft API credentials are missing.');
             $io->error('Missing Silvasoft API credentials.');
-            return;
+            return 'error';
         }
-        usleep(1400000); // Sleep 1.4 seconds
+
         $payload = [
             "OnExistingRelationEmail" => "ABORT",
             "OnExistingRelationNumber" => "ABORT",
             "IsCustomer" => true,
-            // "CustomerNumber" => (int) $customer->getCustomerNumber() ?: '',
             "CustomerNumber" => $customer->getCustomerNumber(),
             "Relation_Contact" => [
                 [
-                    //"Email" => $customer->getEmail(),
-                    "Email"=> strtolower($customer->getEmail()),
+                    "Email" => strtolower($customer->getEmail()),
                     "Phone" => $address?->getPhoneNumber() ?? '',
-                    // "FirstName" => $customer->getFirstName(),
-                    // "LastName" => $customer->getLastName()
                     "FirstName" => ucfirst(strtolower($customer->getFirstName())),
                     "LastName"  => ucfirst(strtolower($customer->getLastName()))
                 ]
@@ -147,17 +186,14 @@ class SynchronizeCustomerWithSilvasoftCommand extends Command
 
         if ($address) {
             $payload += [
-                //"Address_City" => $address->getCity() ?? '',
-                //"Address_Street" => $address->getStreet() ?? '',
-                "Address_City"   => $address->getCity() ? ucwords(strtolower($address->getCity())) : '',
+                "Address_City" => $address->getCity() ? ucwords(strtolower($address->getCity())) : '',
                 "Address_Street" => $address->getStreet() ? ucwords(strtolower($address->getStreet())) : '',
                 "Address_PostalCode" => $address->getZipcode() ?? '',
                 "Address_CountryCode" => $address->getCountry()?->getIso() ?? '',
             ];
         }
 
-        // $salutation = $customer->getSalutation()?->getDisplayName();
-        $salutation = $customer->getSalutation()?->getDisplayName() ?? '';  //fix if no Salutation in SW
+        $salutation = $customer->getSalutation()?->getDisplayName() ?? '';
         $salutationMap = [
             'Herr' => 'Man', 'Mr.' => 'Man', 'Dhr.' => 'Man', 'De heer' => 'Man',
             'Frau' => 'Woman', 'Mrs.' => 'Woman', 'Mevr.' => 'Woman', 'Mevrouw' => 'Woman',
@@ -168,7 +204,7 @@ class SynchronizeCustomerWithSilvasoftCommand extends Command
             $payload['Relation_Contact'][0]['Sex'] = $salutationMap[$salutation];
         }
 
-        $io->text(sprintf(' - Sending customer %s <%s>', $customer->getCustomerNumber(), $customer->getEmail()));
+        $io->text(sprintf('Sending customer %s <%s>', $customer->getCustomerNumber(), $customer->getEmail()));
 
         try {
             $response = $this->httpClient->request('POST', $this->apiUrl . '/rest/addprivaterelation/', [
@@ -178,50 +214,51 @@ class SynchronizeCustomerWithSilvasoftCommand extends Command
                     'Username' => $this->apiUser,
                 ],
                 'json' => $payload,
-               
             ]);
 
             $statusCode = $response->getStatusCode();
+            $content = $response->getContent(false);
 
-            if ($statusCode === 200) {
-                $io->success(sprintf('✓ Synced %s <%s>', $customer->getCustomerNumber(), $customer->getEmail()));
-            } else {
-                $errorMessage = $response->getContent(false);
-
-                $logContext = [
-                    'customerNumber' => $customer->getCustomerNumber(),
-                    'email' => $customer->getEmail(),
-                    'statusCode' => $statusCode,
-                    'payload' => $payload,
-                    'response' => $errorMessage
-                ];
-
-                $this->writeLog('silvasoft_sync_error', "API error syncing customer", $logContext);
-
-                if (str_contains(strtolower($errorMessage), 'already exists') || str_contains($errorMessage, 'Relation already exists')) {
-                    $io->note(sprintf('Customer %s already exists in Silvasoft.', $customer->getCustomerNumber()));
-                } else {
-                    $io->warning(sprintf('API error (%d) for customer %s: %s', $statusCode, $customer->getCustomerNumber(), $errorMessage));
-                }
-            }
-        } catch (\Exception $e) {
             $logContext = [
                 'customerNumber' => $customer->getCustomerNumber(),
                 'email' => $customer->getEmail(),
-                'exception' => $e->getMessage(),
-                'payload' => $payload
+                'statusCode' => $statusCode,
+                'response' => $content,
+                'payload' => $payload,
             ];
 
-            $this->writeLog('silvasoft_sync_error', "Exception while syncing customer", $logContext);
+            if (str_contains(strtolower($content), 'already exists')) {
+                $io->text(sprintf('Skipped: Customer %s already exists in Silvasoft.', $customer->getCustomerNumber()));
+                $this->logError('Customer already exists', $logContext);
+                return 'skipped';
+            }
 
+            if ($statusCode === 200) {
+                $io->text(sprintf('Synced customer %s <%s>', $customer->getCustomerNumber(), $customer->getEmail()));
+                $this->logError('Customer synced', $logContext);
+                return 'synced';
+            } else {
+                $io->warning(sprintf('API error (%d) for customer %s: %s', $statusCode, $customer->getCustomerNumber(), $content));
+                $this->logError('API error', $logContext);
+                return 'error';
+            }
+        } catch (\Exception $e) {
+            $io->error(sprintf('Exception while syncing %s: %s', $customer->getCustomerNumber(), $e->getMessage()));
             $this->logger->error("API exception: " . $e->getMessage());
-            $io->error(sprintf('✗ Exception while syncing %s: %s', $customer->getCustomerNumber(), $e->getMessage()));
+
+            $this->logError('API exception', [
+                'customerNumber' => $customer->getCustomerNumber(),
+                'email' => $customer->getEmail(),
+                'exception' => $e->getMessage(),
+                'payload' => $payload,
+            ]);
+            return 'error';
         }
     }
 
     private function getLogPath(string $logType): string
     {
-        $logDir = dirname(__DIR__, 2) . '/var/log';
+        $logDir = dirname(__DIR__, 2) . '/../../../var/log/silvasoft';
         if (!file_exists($logDir)) {
             mkdir($logDir, 0777, true);
         }
@@ -245,5 +282,27 @@ class SynchronizeCustomerWithSilvasoftCommand extends Command
         $logEntry .= PHP_EOL . str_repeat('-', 80) . PHP_EOL;
 
         file_put_contents($logPath, $logEntry, FILE_APPEND);
+    }
+
+    private function logError(string $message, array $context = []): void
+    {
+        $logEntry = sprintf(
+            "[%s] ERROR: %s | Context: %s\n",
+            date('Y-m-d H:i:s'),
+            $message,
+            json_encode($context, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+        );
+
+        error_log($logEntry, 3, $this->getCustomLogPath());
+    }
+
+    private function getCustomLogPath(): string
+    {
+        $logDir = dirname(__DIR__, 2) . '/../../../var/log/silvasoft';
+        if (!file_exists($logDir)) {
+            mkdir($logDir, 0777, true);
+        }
+        $date = (new \DateTime())->format('Y-m-d');
+        return $logDir . '/customer-sync-' . $date . '.log';
     }
 }
