@@ -4,7 +4,7 @@ namespace BoodoSyncSilvasoft\Service\ScheduledTask;
 
 use Shopware\Core\Framework\MessageQueue\ScheduledTask\ScheduledTask;
 
-class OrderUpdateTask extends ScheduledTask
+class OrderSyncTask extends ScheduledTask
 {
     public static function getTaskName(): string
     {
