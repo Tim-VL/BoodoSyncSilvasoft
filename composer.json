@@ -1,6 +1,6 @@
 {
     "name": "boodo/sync-silvasoft",
-    "version": "3.0.0",
+    "version": "3.0.1",
     "description": "The plugin synchronises the Silvasoft ERP system with the Shopware 6 e-commerce solution. In version 3, syncing is performed via scheduled tasks instead of event-based actions. Manual triggers and logging have also been added.",
     "type": "shopware-platform-plugin",
     "license": "proprietary",
