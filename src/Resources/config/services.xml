@@ -60,6 +60,9 @@
         <service id="BoodoSyncSilvasoft\Service\ScheduledTask\StockUpdateTask">
             <tag name="shopware.scheduled.task" />
         </service>
+        <service id="BoodoSyncSilvasoft\Service\ScheduledTask\OrderUpdateTask">
+            <tag name="shopware.scheduled.task" />
+        </service>
         <service id="BoodoSyncSilvasoft\Service\ScheduledTask\StockUpdateTaskHandler">
             <argument type="service" id="scheduled_task.repository" />
             <argument type="service" id="Shopware\Core\System\SystemConfig\SystemConfigService" />
