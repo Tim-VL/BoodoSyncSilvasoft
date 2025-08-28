@@ -43,7 +43,7 @@ class GeneralSubscriber implements EventSubscriberInterface
     {
         return [
             CustomerRegisterEvent::class => 'onCustomerRegister',
-            CheckoutOrderPlacedEvent::class => 'onOrderPlaced',
+           // CheckoutOrderPlacedEvent::class => 'onOrderPlaced', // replaced by task
             ProductEvents::PRODUCT_WRITTEN_EVENT => 'onProductWritten',
         ];
     }
