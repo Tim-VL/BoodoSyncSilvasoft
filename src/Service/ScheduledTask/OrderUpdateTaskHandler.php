@@ -2,37 +2,19 @@
 
 declare(strict_types=1);
 
-namespace BoodoSyncSilvasoft\Service\ScheduledTask;
+namespace BoodoSyncSilvasoft\Subscriber;
 
-
-use Shopware\Core\Framework\MessageQueue\ScheduledTask\ScheduledTaskHandler;
-use \Symfony\Component\HttpClient\Exception\ClientException;
-use Symfony\Component\Messenger\Attribute\AsMessageHandler;
-use Shopware\Core\System\SystemConfig\SystemConfigService;
-use Shopware\Core\Framework\DataAbstractionLayer\EntityRepository;
-use Shopware\Core\Framework\Context;
-use Shopware\Core\Framework\Uuid\Uuid;
-use Shopware\Core\Framework\DataAbstractionLayer\Search\Criteria;
-use Shopware\Core\Framework\DataAbstractionLayer\Search\Filter\EqualsAnyFilter;
-use Shopware\Core\Framework\DataAbstractionLayer\Search\Aggregation\Metric\CountAggregation;
-use Shopware\Core\Framework\DataAbstractionLayer\Search\AggregationResult\Metric\CountResult;
-use Shopware\Core\Framework\DataAbstractionLayer\Search\Filter\EqualsFilter;
-use Shopware\Core\Content\Product\ProductEntity;
-use Symfony\Contracts\HttpClient\HttpClientInterface;
 use Psr\Log\LoggerInterface;
-
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
-use Shopware\Core\System\SystemConfig\SystemConfigService;
-use Shopware\Core\Checkout\Cart\Event\CheckoutOrderPlacedEvent;
-use Shopware\Core\Checkout\Customer\Event\CustomerRegisterEvent;
-use Shopware\Core\Framework\DataAbstractionLayer\Event\EntityWrittenEvent;
-use Shopware\Core\Framework\DataAbstractionLayer\Search\Criteria;
+use Symfony\Component\Filesystem\Filesystem;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
-use Shopware\Core\Content\Product\ProductEvents;
+use Shopware\Core\Checkout\Cart\Event\CheckoutOrderPlacedEvent;
+use Shopware\Core\Framework\Context;
+use Shopware\Core\Framework\DataAbstractionLayer\EntityRepository;
+use Shopware\Core\Framework\DataAbstractionLayer\Search\Criteria;
+use Shopware\Core\System\SystemConfig\SystemConfigService;
 
-#[AsMessageHandler(handles: StockUpdateTask::class)]
-class OrderUpdateTaskHandler extends ScheduledTaskHandler
-
+class OrderSyncSubscriber implements EventSubscriberInterface
 {
     private const LIMIT = 10;
     private ?string $apiUrl;
@@ -40,36 +22,32 @@ class OrderUpdateTaskHandler extends ScheduledTaskHandler
     private ?string $apiUser;
 
     public function __construct(
-        private readonly MergeGuestAccountService $mergeGuestAccountService,
         private readonly SystemConfigService $systemConfigService,
         private readonly HttpClientInterface $httpClient,
         private readonly EntityRepository $orderRepository,
-        private readonly EntityRepository $productRepository,
-        private readonly EntityRepository $categoryRepository,
         private readonly LoggerInterface $logger
     ) {
-        $this->apiUrl = $this->systemConfigService->get('BoodoSyncSilvasoft.config.apiUrl');
-        $this->apiKey = $this->systemConfigService->get('BoodoSyncSilvasoft.config.apiKey');
-        $this->apiUser = $this->systemConfigService->get('BoodoSyncSilvasoft.config.apiUser');
+        // Fixed: Fetch API config values with null checks
+        $this->apiUrl = (string)$this->systemConfigService->get('BoodoSyncSilvasoft.config.apiUrl');
+        $this->apiKey = (string)$this->systemConfigService->get('BoodoSyncSilvasoft.config.apiKey');
+        $this->apiUser = (string)$this->systemConfigService->get('BoodoSyncSilvasoft.config.apiUser');
     }
 
-    private function getApiHeaders(): array
+    public static function getSubscribedEvents(): array
     {
         return [
-            'Accept-Encoding' => 'gzip,deflate',
-            'Content-Type' => 'application/json',
-            'ApiKey' => $this->apiKey,
-            'Username' => $this->apiUser,
+            CheckoutOrderPlacedEvent::class => 'onOrderPlaced',
         ];
     }
 
-    private function decodeSilvasoftResponse(string $content): array|string|null
+    public function onOrderPlaced(CheckoutOrderPlacedEvent $event): void
     {
-        $decoded = @gzdecode($content) ?: $content;
-        return json_decode($decoded, true) ?? $decoded;
-    }
+        // Ensure essential config is set
+        if (empty($this->apiUrl) || empty($this->apiKey) || empty($this->apiUser)) {
+            $this->logToFile('API credentials are missing in system config');
+            return;
+        }
 
-   public function onOrderPlaced(CheckoutOrderPlacedEvent $event): void{
         $order = $event->getOrder();
         $customer = $order->getOrderCustomer();
         $context = $event->getContext();
@@ -167,8 +145,12 @@ class OrderUpdateTaskHandler extends ScheduledTaskHandler
                 "LastName" => ucwords(strtolower($customer->getLastName())),
                 "DefaultContact" => true
             ]],
-            "Invoice_InvoiceLine" => array_values(array_map(function ($lineItem) {
+            "Invoice_InvoiceLine" => array_values(array_filter(array_map(function ($lineItem) {
                 $price = $lineItem->getPrice();
+                if (!$price) {
+                    return null; // Fixed: Skip if price is null
+                }
+
                 $unitPriceGross = $price->getUnitPrice();
                 $taxRate = $price->getCalculatedTaxes()->first()?->getTaxRate() ?? 21;
                 $unitPriceNet = $unitPriceGross / (1 + ($taxRate / 100));
@@ -181,7 +163,7 @@ class OrderUpdateTaskHandler extends ScheduledTaskHandler
                     "UnitPriceExclTax" => round($unitPriceNet, 2),
                     "Description" => $lineItem->getLabel() && trim($lineItem->getLabel()) !== '' ? $lineItem->getLabel() : 'UNK'
                 ];
-            }, $order->getLineItems()->getElements())),
+            }, $order->getLineItems()->getElements()))),
             "Invoice_Address" => [
                 [
                     "Address_Street" => ucwords(strtolower($billingAddress->getStreet() ?? '')),
@@ -224,7 +206,7 @@ class OrderUpdateTaskHandler extends ScheduledTaskHandler
                 ]
             ], $context);
 
-            $this->logToFile('Order successfully synced to Silvasoft.'); // Success: no payload
+            $this->logToFile('Order successfully synced to Silvasoft.');
         } catch (\Throwable $e) {
             $this->logToFile('Order sync to Silvasoft failed', [
                 'error' => $e->getMessage(),
@@ -233,14 +215,30 @@ class OrderUpdateTaskHandler extends ScheduledTaskHandler
         }
     }
 
+    private function decodeSilvasoftResponse(string $content): array|string|null
+    {
+        $decoded = @gzdecode($content) ?: $content;
+        return json_decode($decoded, true) ?? $decoded;
+    }
+
+    private function getApiHeaders(): array
+    {
+        return [
+            'Accept-Encoding' => 'gzip,deflate',
+            'Content-Type' => 'application/json',
+            'ApiKey' => $this->apiKey,
+            'Username' => $this->apiUser,
+        ];
+    }
+
     /**
-    * Custom file logger to write to var/log/silvasoft/OrderTask-YYYY-MM-DD.log
-    */
+     * Custom file logger to write to var/log/silvasoft/OrderTask-YYYY-MM-DD.log
+     */
     private function logToFile(string $message, array $context = []): void
     {
+        // Fixed: added Filesystem import
         $date = (new \DateTime())->format('Y-m-d');
-        $logDir = dirname(__DIR__) . '/../../../../var/log/silvasoft/';
-        //$logDir = $this->kernel->getProjectDir() . '/var/log/silvasoft';
+        $logDir = dirname(__DIR__, 4) . '/var/log/silvasoft/';
         $logFile = $logDir . "/OrderTask-{$date}.log";
 
         $filesystem = new Filesystem();
@@ -255,6 +253,5 @@ class OrderUpdateTaskHandler extends ScheduledTaskHandler
 
         $entry .= PHP_EOL;
         file_put_contents($logFile, $entry, FILE_APPEND);
-    }
     }
 }
