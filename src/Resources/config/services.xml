@@ -73,7 +73,7 @@
         <service id="BoodoSyncSilvasoft\Service\ScheduledTask\OrderUpdateTask">
             <tag name="shopware.scheduled.task" />
         </service>
-         <service id="BoodoSyncSilvasoft\Subscriber\OrderSyncSubscriber">
+         <service id="BoodoSyncSilvasoft\Subscriber\OrderUpdateTaskHandler">
             <argument type="service" id="Shopware\Core\System\SystemConfig\SystemConfigService"/>
             <argument type="service" id="Symfony\Contracts\HttpClient\HttpClientInterface"/>
             <argument type="service" id="order.repository"/>
