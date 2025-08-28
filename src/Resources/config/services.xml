@@ -69,7 +69,8 @@
             <argument type="service" id="logger" />
             <tag name="messenger.message_handler" />
         </service>
-                <service id="BoodoSyncSilvasoft\Service\ScheduledTask\OrderUpdateTask">
+        <!-- Register OrderSyncSubscriber  -->
+        <service id="BoodoSyncSilvasoft\Service\ScheduledTask\OrderUpdateTask">
             <tag name="shopware.scheduled.task" />
         </service>
          <service id="BoodoSyncSilvasoft\Subscriber\OrderSyncSubscriber">
