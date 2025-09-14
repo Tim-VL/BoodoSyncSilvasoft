@@ -14,9 +14,7 @@ use Shopware\Core\Framework\DataAbstractionLayer\EntityRepository;
 use Shopware\Core\Framework\DataAbstractionLayer\Search\Criteria;
 use Shopware\Core\System\SystemConfig\SystemConfigService;
 
-//class OrderSyncSubscriber implements EventSubscriberInterface
-#[AsMessageHandler(handles: OrderUpdateTask::class)]
-class OrderUpdateTaskHandler implements EventSubscriberInterface
+class OrderSyncSubscriber implements EventSubscriberInterface
 {
     private const LIMIT = 10;
     private ?string $apiUrl;

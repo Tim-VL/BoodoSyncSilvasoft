@@ -120,14 +120,12 @@ class StockSyncService
     {
         $criteria = new Criteria();
         $products = $this->productRepository->search($criteria, $context);
-        $taxRate = $price->getCalculatedTaxes()?->first()?->getTaxRate() ?? 21;
         foreach ($products as $product) {
             $payload = [
                 'ArticleNumber' => $product->getProductNumber(),
                 'NewStockQty' => $product->getStock(),
                 'NewSalePrice' => $product->getPrice()->first()?->getNet(), // Net or Gross price to sync
-                'StockUpdateMode' => 'Absolute',
-                'NewPurchasePriceVATPercentage ' => $taxRate  // add purchase tax
+                'StockUpdateMode' => 'Absolute'
             ];
             // Logging/Debug-Ausgabe
             $this->logger->info('[Silvasoft Sync] Stock-Update-Payload', $payload);
